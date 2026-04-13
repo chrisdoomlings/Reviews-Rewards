@@ -24,7 +24,7 @@ api_version = "2026-07"
 scopes = "write_products,write_metaobjects,write_metaobject_definitions"
 
 [auth]
-redirect_urls = [ "https://reviews-rewards.vercel.app/api/auth" ]
+redirect_urls = [ "https://reviews-rewards.vercel.app/auth/callback" ]
 
 [product.metafields.app.demo_info]
 type = "single_line_text_field"
