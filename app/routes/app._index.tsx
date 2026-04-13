@@ -1,7 +1,6 @@
 import { useState, useRef } from "react";
 import type { ActionFunctionArgs, HeadersFunction, LoaderFunctionArgs } from "react-router";
 import { useLoaderData, useFetcher } from "react-router";
-import { unstable_parseMultipartFormData, unstable_createMemoryUploadHandler } from "@react-router/node";
 import { authenticate } from "../shopify.server";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import prisma from "../db.server";
@@ -16,22 +15,17 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 export const action = async ({ request }: ActionFunctionArgs) => {
   await authenticate.admin(request);
 
-  const cloned = request.clone();
-  const contentType = request.headers.get("content-type") ?? "";
+  const formData = await request.formData();
+  const intent = formData.get("intent") as string;
 
-  if (contentType.includes("multipart/form-data")) {
-    const uploadHandler = unstable_createMemoryUploadHandler({ maxPartSize: 10_000_000 });
-    const formData = await unstable_parseMultipartFormData(request, uploadHandler);
+  if (intent === "upload") {
     const file = formData.get("file") as File | null;
-
     if (!file || file.size === 0) return { uploadError: "No file selected." };
-
     const buffer = Buffer.from(await file.arrayBuffer());
     const url = await uploadToR2(buffer, file.name, file.type);
     return { uploadedUrl: url };
   }
 
-  const formData = await cloned.formData();
   const text = formData.get("text") as string;
   if (!text?.trim()) return { error: "Note cannot be empty." };
   await prisma.note.create({ data: { text } });
@@ -60,6 +54,7 @@ export default function Index() {
     const file = fileInputRef.current?.files?.[0];
     if (!file) return;
     const formData = new FormData();
+    formData.append("intent", "upload");
     formData.append("file", file);
     uploadFetcher.submit(formData, { method: "POST", encType: "multipart/form-data" });
   };
@@ -120,7 +115,7 @@ export default function Index() {
           <s-paragraph>No notes yet.</s-paragraph>
         ) : (
           <s-stack direction="block" gap="base">
-            {notes.map((note: { id: number; text: string; createdAt: string }) => (
+            {notes.map((note: { id: number; text: string; createdAt: Date }) => (
               <s-box key={note.id} padding="base" borderWidth="base" borderRadius="base">
                 <s-paragraph>{note.text}</s-paragraph>
                 <s-text tone="neutral">{new Date(note.createdAt).toLocaleString()}</s-text>
