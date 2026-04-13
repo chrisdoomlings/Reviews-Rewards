@@ -5,6 +5,7 @@ import { authenticate } from "../shopify.server";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import prisma from "../db.server";
 import { uploadToR2 } from "../r2.server";
+import { Resend } from "resend";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   await authenticate.admin(request);
@@ -23,7 +24,23 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     if (!file || file.size === 0) return { uploadError: "No file selected." };
     const buffer = Buffer.from(await file.arrayBuffer());
     const url = await uploadToR2(buffer, file.name, file.type);
-    return { uploadedUrl: url };
+
+    const resend = new Resend(process.env.RESEND_API_KEY);
+    const { data, error } = await resend.emails.send({
+      from: "onboarding@resend.dev",
+      to: "amgst99@gmail.com",
+      subject: "New file uploaded — Reviews & Rewards",
+      html: `
+        <h2>New file uploaded</h2>
+        <p><strong>File name:</strong> ${file.name}</p>
+        <p><strong>File type:</strong> ${file.type}</p>
+        <p><strong>URL:</strong> <a href="${url}">${url}</a></p>
+      `,
+    });
+
+    console.log("Resend response:", JSON.stringify({ data, error }));
+
+    return { uploadedUrl: url, emailError: error?.message ?? null };
   }
 
   const text = formData.get("text") as string;
@@ -45,6 +62,7 @@ export default function Index() {
   const noteError = noteFetcher.data && "error" in noteFetcher.data ? (noteFetcher.data as any).error : null;
   const uploadedUrl = uploadFetcher.data && "uploadedUrl" in uploadFetcher.data ? (uploadFetcher.data as any).uploadedUrl : null;
   const uploadError = uploadFetcher.data && "uploadError" in uploadFetcher.data ? (uploadFetcher.data as any).uploadError : null;
+  const emailError = uploadFetcher.data && "emailError" in uploadFetcher.data ? (uploadFetcher.data as any).emailError : null;
 
   const handleSaveNote = () => {
     noteFetcher.submit({ text }, { method: "POST" });
@@ -96,6 +114,9 @@ export default function Index() {
           {uploadedUrl && (
             <s-stack direction="block" gap="base">
               <s-banner tone="success"><s-paragraph>Uploaded successfully!</s-paragraph></s-banner>
+              {emailError && (
+                <s-banner tone="warning"><s-paragraph>Email error: {emailError}</s-paragraph></s-banner>
+              )}
               <s-paragraph>
                 URL: <a href={uploadedUrl} target="_blank" rel="noreferrer">{uploadedUrl}</a>
               </s-paragraph>
