@@ -5,37 +5,204 @@ generator client {
   provider = "prisma-client-js"
 }
 
-// Note that some adapters may set a maximum length for the String type by default, please ensure your strings are long
-// enough when changing adapters.
-// See https://www.prisma.io/docs/orm/reference/prisma-schema-reference#string for more information
 datasource db {
   provider  = "postgresql"
   url       = env("DATABASE_URL")
   directUrl = env("DIRECT_URL")
 }
 
-model Note {
-  id        Int      @id @default(autoincrement())
-  text      String
-  createdAt DateTime @default(now())
-}
+// ─── Shopify session storage (required by shopify-app-session-storage-prisma) ───
 
 model Session {
-  id            String    @id
-  shop          String
-  state         String
-  isOnline      Boolean   @default(false)
-  scope         String?
-  expires       DateTime?
-  accessToken   String
-  userId        BigInt?
-  firstName     String?
-  lastName      String?
-  email         String?
-  accountOwner  Boolean   @default(false)
-  locale        String?
-  collaborator  Boolean?  @default(false)
-  emailVerified Boolean?  @default(false)
+  id                  String    @id
+  shop                String
+  state               String
+  isOnline            Boolean   @default(false)
+  scope               String?
+  expires             DateTime?
+  accessToken         String
+  userId              BigInt?
+  firstName           String?
+  lastName            String?
+  email               String?
+  accountOwner        Boolean   @default(false)
+  locale              String?
+  collaborator        Boolean?  @default(false)
+  emailVerified       Boolean?  @default(false)
   refreshToken        String?
   refreshTokenExpires DateTime?
+}
+
+// ─── Loyalty: customers ───────────────────────────────────────────────────────
+
+model Customer {
+  id               String   @id @default(cuid())
+  shopifyCustomerId String  @unique
+  shop             String                      // which Shopify store (multi-tenant)
+  email            String
+  firstName        String?
+  lastName         String?
+  pointsBalance    Int      @default(0)
+  tier             String   @default("base")   // matches "Ends with Benefits" tier names
+  pointsExpiresAt  DateTime?                   // 12-month rolling from last earn/redeem
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  transactions  Transaction[]
+  redemptions   Redemption[]
+  reviews       Review[]
+  loginSessions LoginSession[]
+
+  @@unique([shop, email])
+  @@index([shop])
+}
+
+// ─── Loyalty: point transactions ─────────────────────────────────────────────
+
+model Transaction {
+  id          String   @id @default(cuid())
+  customerId  String
+  type        String                           // "earn" | "redeem" | "expire" | "adjust"
+  points      Int                              // positive = earn, negative = spend/expire
+  description String?
+  orderId     String?                          // Shopify order GID (earn events)
+  createdAt   DateTime @default(now())
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([customerId])
+  @@index([orderId])
+}
+
+// ─── Loyalty: reward catalog (admin-managed) ─────────────────────────────────
+
+model Reward {
+  id          String   @id @default(cuid())
+  shop        String
+  name        String
+  description String?
+  pointsCost  Int
+  type        String                           // "discount_pct" | "discount_fixed" | "free_product"
+  value       String                           // e.g. "10" for 10% off
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  redemptions Redemption[]
+
+  @@index([shop])
+}
+
+// ─── Loyalty: redemptions ────────────────────────────────────────────────────
+
+model Redemption {
+  id           String   @id @default(cuid())
+  customerId   String
+  rewardId     String
+  pointsSpent  Int
+  discountCode String?
+  status       String   @default("pending")   // "pending" | "fulfilled" | "cancelled"
+  createdAt    DateTime @default(now())
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  reward   Reward   @relation(fields: [rewardId], references: [id])
+
+  @@index([customerId])
+}
+
+// ─── Reviews ─────────────────────────────────────────────────────────────────
+
+model Review {
+  id                String    @id @default(cuid())
+  shop              String
+  customerId        String?                     // null = anonymous (unverified)
+  shopifyOrderId    String?
+  shopifyProductId  String
+  shopifyVariantId  String?
+  rating            Int                         // 1–5
+  title             String?
+  body              String?
+  status            String    @default("pending") // "pending" | "approved" | "rejected"
+  verifiedPurchase  Boolean   @default(false)
+  adminReply        String?
+  adminReplyAt      DateTime?
+  flagged           Boolean   @default(false)   // auto-flag rules
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  customer Customer?     @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  photos   ReviewPhoto[]
+  videos   ReviewVideo[]
+
+  @@index([shop, shopifyProductId])
+  @@index([status])
+  @@index([customerId])
+}
+
+// ─── Review photos ────────────────────────────────────────────────────────────
+
+model ReviewPhoto {
+  id        String   @id @default(cuid())
+  reviewId  String
+  r2Key     String                              // path in R2 bucket
+  url       String                              // public CDN URL
+  createdAt DateTime @default(now())
+
+  review Review @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+
+  @@index([reviewId])
+}
+
+// ─── Review videos (NEW) ──────────────────────────────────────────────────────
+
+model ReviewVideo {
+  id              String    @id @default(cuid())
+  reviewId        String
+  r2KeyRaw        String                        // uploads/ prefix — original file
+  r2KeyProcessed  String?                       // processed/ prefix — H.264 720p transcode
+  status          String    @default("pending") // "pending" | "processing" | "ready" | "failed"
+  durationSecs    Int?
+  rawDeleteAt     DateTime?                     // 90 days after upload
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  review Review @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+
+  @@index([reviewId])
+  @@index([status])
+}
+
+// ─── Email jobs — Klaviyo queue (NEW) ────────────────────────────────────────
+
+model EmailJob {
+  id           String    @id @default(cuid())
+  shop         String
+  type         String                           // "review_request" | "review_reminder" | "tier_upgrade" | "points_expiry" | "otc_login"
+  customerId   String?
+  scheduledFor DateTime
+  sentAt       DateTime?
+  status       String    @default("pending")   // "pending" | "sent" | "failed" | "cancelled"
+  payload      Json
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([shop, status, scheduledFor])
+  @@index([customerId])
+}
+
+// ─── Login sessions — Multipass OTC (NEW) ────────────────────────────────────
+
+model LoginSession {
+  id           String    @id @default(cuid())
+  customerId   String
+  otcCode      String?                          // 4-digit one-time code
+  otcExpiresAt DateTime?
+  ipAddress    String?
+  userAgent    String?
+  verifiedAt   DateTime?
+  createdAt    DateTime  @default(now())
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([customerId])
 }
