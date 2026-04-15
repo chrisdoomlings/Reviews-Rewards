@@ -1,44 +1,90 @@
 import type { CSSProperties } from "react";
 import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
+import { useLoaderData } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 
 import { authenticate } from "../shopify.server";
+import { getOverviewStats } from "../loyalty.server";
+import { getReviewStats } from "../reviews.server";
+import prisma from "../db.server";
+
+// ─── Loader ───────────────────────────────────────────────────────────────────
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  await authenticate.admin(request);
-  return {};
+  const { session } = await authenticate.admin(request);
+  const { shop } = session;
+
+  const [loyaltyStats, reviewStats, balanceAgg, redemptionCount, recentTransactions] =
+    await Promise.all([
+      getOverviewStats(shop),
+      getReviewStats(shop),
+      // Sum of current points balances across all customers
+      prisma.customer.aggregate({ where: { shop }, _sum: { pointsBalance: true } }),
+      // Total redemptions ever made
+      prisma.redemption.count({ where: { customer: { shop } } }),
+      // Last 5 earn transactions for the activity feed
+      prisma.transaction.findMany({
+        where: { customer: { shop }, type: "earn" },
+        orderBy: { createdAt: "desc" },
+        take: 5,
+        include: { customer: { select: { email: true, firstName: true, lastName: true } } },
+      }),
+    ]);
+
+  return {
+    totalMembers: loyaltyStats.totalMembers,
+    totalPointsInCirculation: balanceAgg._sum.pointsBalance ?? 0,
+    expiringIn30Days: loyaltyStats.expiringIn30Days,
+    activeRewardsCount: loyaltyStats.activeRewardsCount,
+    redemptionCount,
+    reviewStats,
+    recentTransactions: recentTransactions.map((t) => {
+      const name = t.customer
+        ? [t.customer.firstName, t.customer.lastName].filter(Boolean).join(" ") ||
+          t.customer.email
+        : "Unknown";
+      return {
+        id: t.id,
+        label: `${name} — ${t.points.toLocaleString()} pts`,
+        meta: t.description ?? "Earn event",
+        time: t.createdAt.toISOString(),
+      };
+    }),
+  };
 };
 
-const programMetrics = [
-  {
-    label: "Active members",
-    value: "18,420",
-    trend: "+8.4%",
-    detail: "1,248 purchased in the last 30 days",
-    tone: "success",
-  },
-  {
-    label: "Redeemable points",
-    value: "7.8M",
-    trend: "+11.2%",
-    detail: "2,184 shoppers are above the first reward threshold",
-    tone: "info",
-  },
-  {
-    label: "Rewards claimed",
-    value: "2,914",
-    trend: "+4.1%",
-    detail: "Top reward: $10 off coupon",
-    tone: "success",
-  },
-  {
-    label: "Pending reviews",
-    value: "37",
-    trend: "-6 today",
-    detail: "5 include video and need manual approval",
-    tone: "warning",
-  },
-];
+// ─── Styles ───────────────────────────────────────────────────────────────────
+
+const statusTone: Record<string, { background: string; color: string }> = {
+  Ready:          { background: "#dff7e5", color: "#0a7d45" },
+  "In review":    { background: "#e8f2ff", color: "#005bd3" },
+  "Needs input":  { background: "#fff1d6", color: "#9a6700" },
+  "In progress":  { background: "#e8f2ff", color: "#005bd3" },
+  "Needs review": { background: "#fff1d6", color: "#9a6700" },
+  "On track":     { background: "#dff7e5", color: "#0a7d45" },
+  Blocked:        { background: "#fde8e8", color: "#b42318" },
+};
+
+const styles = {
+  metricCard: {
+    border: "1px solid #e1e3e5",
+    borderRadius: "12px",
+    padding: "16px",
+    background: "linear-gradient(180deg, #ffffff 0%, #f6f6f7 100%)",
+  } satisfies CSSProperties,
+  muted: { color: "#5c5f62", fontSize: "13px", lineHeight: 1.5 } satisfies CSSProperties,
+  statusPill: (status: string): CSSProperties => ({
+    display: "inline-flex",
+    padding: "3px 10px",
+    borderRadius: "999px",
+    background: statusTone[status]?.background ?? "#eceeef",
+    color: statusTone[status]?.color ?? "#5c5f62",
+    fontSize: "12px",
+    fontWeight: 600,
+  }),
+};
+
+// ─── Editorial content (project-state, not DB data) ───────────────────────────
 
 const migrationChecklist = [
   {
@@ -61,111 +107,54 @@ const migrationChecklist = [
   },
 ];
 
-const moderationSummary = [
-  { label: "Approved today", value: "22" },
-  { label: "Flagged by rule", value: "9" },
-  { label: "Average rating", value: "4.7" },
-  { label: "Video submissions", value: "14" },
-];
-
 const launchMilestones = [
-  {
-    name: "Infrastructure + migration prep",
-    owner: "Developer",
-    status: "In progress",
-    due: "This week",
-  },
-  {
-    name: "Loyalty admin parity pass",
-    owner: "Product + Ops",
-    status: "Needs review",
-    due: "Next",
-  },
-  {
-    name: "Reviews + video moderation",
-    owner: "Support",
-    status: "On track",
-    due: "Next",
-  },
-  {
-    name: "Theme extension QA",
-    owner: "Lifecycle",
-    status: "On track",
-    due: "Next",
-  },
+  { name: "Schema + points engine",            owner: "Developer",    status: "In progress", due: "Done" },
+  { name: "Loyalty admin dashboard",           owner: "Developer",    status: "In progress", due: "Done" },
+  { name: "Reviews + video moderation",        owner: "Support",      status: "In progress", due: "Done" },
+  { name: "Theme extension / storefront widget", owner: "Developer",  status: "Needs review", due: "Next" },
+  { name: "Multipass / OTC login",             owner: "Developer",    status: "Needs input",  due: "Next" },
+  { name: "Yotpo data migration",              owner: "Product + Ops", status: "Needs input", due: "TBD" },
 ];
 
-const recentActivity = [
-  {
-    title: "Gold tier threshold draft updated",
-    meta: "Loyalty settings",
-    time: "12 minutes ago",
-  },
-  {
-    title: "1,240 point reward redemption imported from Yotpo sample",
-    meta: "Migration validation",
-    time: "28 minutes ago",
-  },
-  {
-    title: "Pebble product block placement verified on mobile PDP",
-    meta: "Theme extension QA",
-    time: "1 hour ago",
-  },
-  {
-    title: "Moderation queue cleared for video reviews",
-    meta: "Reviews queue",
-    time: "2 hours ago",
-  },
-];
-
-const toneColor: Record<string, string> = {
-  success: "#0a7d45",
-  info: "#005bd3",
-  warning: "#b98900",
-};
-
-const statusTone: Record<string, { background: string; color: string }> = {
-  Ready: { background: "#dff7e5", color: "#0a7d45" },
-  "In review": { background: "#e8f2ff", color: "#005bd3" },
-  "Needs input": { background: "#fff1d6", color: "#9a6700" },
-  "In progress": { background: "#e8f2ff", color: "#005bd3" },
-  "Needs review": { background: "#fff1d6", color: "#9a6700" },
-  "On track": { background: "#dff7e5", color: "#0a7d45" },
-  Blocked: { background: "#fde8e8", color: "#b42318" },
-};
-
-const styles = {
-  metricGrid: {
-    display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))",
-    gap: "12px",
-  } satisfies CSSProperties,
-  metricCard: {
-    border: "1px solid #e1e3e5",
-    borderRadius: "12px",
-    padding: "16px",
-    background: "linear-gradient(180deg, #ffffff 0%, #f6f6f7 100%)",
-    minHeight: "132px",
-  } satisfies CSSProperties,
-  muted: {
-    color: "#5c5f62",
-    fontSize: "13px",
-    lineHeight: 1.5,
-  } satisfies CSSProperties,
-  statusPill: (status: string) =>
-    ({
-      display: "inline-flex",
-      alignItems: "center",
-      padding: "3px 10px",
-      borderRadius: "999px",
-      background: statusTone[status].background,
-      color: statusTone[status].color,
-      fontSize: "12px",
-      fontWeight: 600,
-    }) satisfies CSSProperties,
-};
+// ─── Component ────────────────────────────────────────────────────────────────
 
 export default function Dashboard() {
+  const d = useLoaderData<typeof loader>();
+
+  const programMetrics = [
+    {
+      label: "Total members",
+      value: d.totalMembers.toLocaleString(),
+      detail: `${d.expiringIn30Days.toLocaleString()} expiring in 30 days`,
+      tone: "#005bd3",
+    },
+    {
+      label: "Points in circulation",
+      value: d.totalPointsInCirculation.toLocaleString(),
+      detail: `${d.activeRewardsCount} reward${d.activeRewardsCount !== 1 ? "s" : ""} in catalog`,
+      tone: "#0a7d45",
+    },
+    {
+      label: "Redemptions",
+      value: d.redemptionCount.toLocaleString(),
+      detail: `${d.activeRewardsCount} active reward${d.activeRewardsCount !== 1 ? "s" : ""}`,
+      tone: "#9a6700",
+    },
+    {
+      label: "Pending reviews",
+      value: d.reviewStats.pending.toLocaleString(),
+      detail: `${d.reviewStats.flagged} flagged · avg ${d.reviewStats.avgRating || "—"} stars`,
+      tone: d.reviewStats.pending > 0 ? "#b42318" : "#0a7d45",
+    },
+  ];
+
+  const moderationSummary = [
+    { label: "Approved today", value: d.reviewStats.approvedToday.toLocaleString() },
+    { label: "Flagged",        value: d.reviewStats.flagged.toLocaleString() },
+    { label: "Avg rating",     value: d.reviewStats.avgRating ? String(d.reviewStats.avgRating) : "—" },
+    { label: "Pending",        value: d.reviewStats.pending.toLocaleString() },
+  ];
+
   return (
     <s-page heading="Admin overview">
       <s-section slot="aside" heading="Launch focus">
@@ -180,40 +169,24 @@ export default function Dashboard() {
         </s-stack>
       </s-section>
 
+      {/* ── Program health ─────────────────────────────────────────── */}
       <s-section heading="Program health">
-        <div style={styles.metricGrid}>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
+            gap: "12px",
+          }}
+        >
           {programMetrics.map((metric) => (
             <div key={metric.label} style={styles.metricCard}>
+              <div style={{ fontSize: "13px", color: "#5c5f62", marginBottom: "8px" }}>
+                {metric.label}
+              </div>
               <div
-                style={{
-                  display: "flex",
-                  alignItems: "flex-start",
-                  justifyContent: "space-between",
-                  gap: "12px",
-                  marginBottom: "20px",
-                }}
+                style={{ fontSize: "30px", fontWeight: 700, color: metric.tone, marginBottom: "12px" }}
               >
-                <div>
-                  <div style={{ fontSize: "13px", color: "#5c5f62", marginBottom: "8px" }}>
-                    {metric.label}
-                  </div>
-                  <div style={{ fontSize: "30px", fontWeight: 700, color: "#202223" }}>
-                    {metric.value}
-                  </div>
-                </div>
-                <span
-                  style={{
-                    color: toneColor[metric.tone],
-                    background: `${toneColor[metric.tone]}14`,
-                    borderRadius: "999px",
-                    padding: "4px 10px",
-                    fontSize: "12px",
-                    fontWeight: 700,
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  {metric.trend}
-                </span>
+                {metric.value}
               </div>
               <div style={styles.muted}>{metric.detail}</div>
             </div>
@@ -221,6 +194,7 @@ export default function Dashboard() {
         </div>
       </s-section>
 
+      {/* ── Migration readiness ────────────────────────────────────── */}
       <s-section heading="Migration readiness">
         <s-stack direction="block" gap="base">
           {migrationChecklist.map((item) => (
@@ -248,92 +222,38 @@ export default function Dashboard() {
         </s-stack>
       </s-section>
 
-      <s-section heading="Reviews operations snapshot">
+      {/* ── Reviews snapshot ───────────────────────────────────────── */}
+      <s-section heading="Reviews snapshot">
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "minmax(0, 2fr) minmax(260px, 1fr)",
-            gap: "12px",
+            gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
+            gap: "10px",
           }}
         >
-          <div
-            style={{
-              border: "1px solid #e1e3e5",
-              borderRadius: "12px",
-              padding: "16px",
-              background: "#ffffff",
-            }}
-          >
+          {moderationSummary.map((item) => (
             <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
-                gap: "10px",
-              }}
+              key={item.label}
+              style={{ padding: "14px", borderRadius: "10px", background: "#f6f6f7" }}
             >
-              {moderationSummary.map((item) => (
-                <div
-                  key={item.label}
-                  style={{
-                    padding: "14px",
-                    borderRadius: "10px",
-                    background: "#f6f6f7",
-                  }}
-                >
-                  <div style={{ fontSize: "24px", fontWeight: 700, marginBottom: "4px" }}>
-                    {item.value}
-                  </div>
-                  <div style={{ fontSize: "12px", color: "#5c5f62" }}>{item.label}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div
-            style={{
-              border: "1px solid #e1e3e5",
-              borderRadius: "12px",
-              padding: "16px",
-              background: "#fafbfb",
-            }}
-          >
-            <div style={{ fontWeight: 600, marginBottom: "10px" }}>Channel health</div>
-            <div style={{ ...styles.muted, marginBottom: "14px" }}>
-              Product page and account-area prompts are driving most review volume.
-              Support should keep pending reviews under 24 hours.
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-              <div>
-                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "4px" }}>
-                  <span style={{ fontSize: "12px", color: "#5c5f62" }}>Email CTR</span>
-                  <span style={{ fontSize: "12px", fontWeight: 600 }}>18.2%</span>
-                </div>
-                <div style={{ height: "8px", borderRadius: "999px", background: "#e1e3e5" }}>
-                  <div style={{ width: "72%", height: "100%", borderRadius: "999px", background: "#005bd3" }} />
-                </div>
+              <div style={{ fontSize: "24px", fontWeight: 700, marginBottom: "4px" }}>
+                {item.value}
               </div>
-              <div>
-                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "4px" }}>
-                  <span style={{ fontSize: "12px", color: "#5c5f62" }}>Submission completion</span>
-                  <span style={{ fontSize: "12px", fontWeight: 600 }}>64%</span>
-                </div>
-                <div style={{ height: "8px", borderRadius: "999px", background: "#e1e3e5" }}>
-                  <div style={{ width: "64%", height: "100%", borderRadius: "999px", background: "#0a7d45" }} />
-                </div>
-              </div>
+              <div style={{ fontSize: "12px", color: "#5c5f62" }}>{item.label}</div>
             </div>
-          </div>
+          ))}
         </div>
       </s-section>
 
+      {/* ── Launch milestones ──────────────────────────────────────── */}
       <s-section heading="Launch milestones">
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px" }}>
             <thead>
               <tr style={{ borderBottom: "1px solid #d2d5d8" }}>
-                {["Milestone", "Owner", "Status", "Timing"].map((header) => (
+                {["Milestone", "Owner", "Status", "Timing"].map((h) => (
                   <th
-                    key={header}
+                    key={h}
                     style={{
                       textAlign: "left",
                       padding: "10px 12px",
@@ -343,7 +263,7 @@ export default function Dashboard() {
                       letterSpacing: "0.04em",
                     }}
                   >
-                    {header}
+                    {h}
                   </th>
                 ))}
               </tr>
@@ -351,9 +271,7 @@ export default function Dashboard() {
             <tbody>
               {launchMilestones.map((row) => (
                 <tr key={row.name} style={{ borderBottom: "1px solid #eceeef" }}>
-                  <td style={{ padding: "12px" }}>
-                    <div style={{ fontWeight: 600 }}>{row.name}</div>
-                  </td>
+                  <td style={{ padding: "12px", fontWeight: 600 }}>{row.name}</td>
                   <td style={{ padding: "12px", color: "#5c5f62" }}>{row.owner}</td>
                   <td style={{ padding: "12px" }}>
                     <span style={styles.statusPill(row.status)}>{row.status}</span>
@@ -366,37 +284,42 @@ export default function Dashboard() {
         </div>
       </s-section>
 
-      <s-section heading="Recent activity">
-        <s-stack direction="block" gap="base">
-          {recentActivity.map((item) => (
-            <div
-              key={item.title}
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                gap: "16px",
-                alignItems: "flex-start",
-                borderBottom: "1px solid #eceeef",
-                paddingBottom: "12px",
-              }}
-            >
-              <div>
-                <div style={{ fontSize: "14px", fontWeight: 600, marginBottom: "3px" }}>
-                  {item.title}
+      {/* ── Recent earn activity ───────────────────────────────────── */}
+      <s-section heading="Recent earn activity">
+        {d.recentTransactions.length === 0 ? (
+          <div style={{ ...styles.muted, padding: "16px 0" }}>
+            No earn activity yet — transactions will appear here after the first order or approved review.
+          </div>
+        ) : (
+          <s-stack direction="block" gap="base">
+            {d.recentTransactions.map((item) => (
+              <div
+                key={item.id}
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  gap: "16px",
+                  alignItems: "flex-start",
+                  borderBottom: "1px solid #eceeef",
+                  paddingBottom: "12px",
+                }}
+              >
+                <div>
+                  <div style={{ fontSize: "14px", fontWeight: 600, marginBottom: "3px" }}>
+                    {item.label}
+                  </div>
+                  <div style={{ fontSize: "12px", color: "#5c5f62" }}>{item.meta}</div>
                 </div>
-                <div style={{ fontSize: "12px", color: "#5c5f62" }}>{item.meta}</div>
+                <div style={{ fontSize: "12px", color: "#5c5f62", whiteSpace: "nowrap" }}>
+                  {new Date(item.time).toLocaleString()}
+                </div>
               </div>
-              <div style={{ fontSize: "12px", color: "#5c5f62", whiteSpace: "nowrap" }}>
-                {item.time}
-              </div>
-            </div>
-          ))}
-        </s-stack>
+            ))}
+          </s-stack>
+        )}
       </s-section>
     </s-page>
   );
 }
 
-export const headers: HeadersFunction = (headersArgs) => {
-  return boundary.headers(headersArgs);
-};
+export const headers: HeadersFunction = (headersArgs) => boundary.headers(headersArgs);
