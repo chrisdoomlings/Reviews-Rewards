@@ -17,12 +17,29 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const shop = url.searchParams.get("shop") ?? "";
   const page = Math.max(1, parseInt(url.searchParams.get("page") ?? "1", 10));
   const limit = Math.min(25, Math.max(1, parseInt(url.searchParams.get("limit") ?? "10", 10)));
+  const shopifyCustomerId = url.searchParams.get("customerId") ?? "";
 
   if (!shopifyProductId || !shop) {
     return corsJson({ error: "Missing required parameters" }, { status: 400 });
   }
 
   const where = { shop, shopifyProductId, status: "approved" } as const;
+
+  // Resolve whether this customer has already reviewed this product
+  let customerHasReviewed = false;
+  if (shopifyCustomerId) {
+    const customer = await prisma.customer.findUnique({
+      where: { shopifyCustomerId },
+      select: { id: true },
+    });
+    if (customer) {
+      const existing = await prisma.review.findFirst({
+        where: { customerId: customer.id, shopifyProductId },
+        select: { id: true },
+      });
+      customerHasReviewed = !!existing;
+    }
+  }
 
   const [reviews, total, ratingAgg, ratingDistRows] = await Promise.all([
     prisma.review.findMany({
@@ -81,6 +98,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       limit,
       avgRating: ratingAgg._avg.rating ? Number(ratingAgg._avg.rating.toFixed(1)) : 0,
       ratingDistribution,
+      customerHasReviewed,
     },
     { headers: { "Cache-Control": "public, max-age=60" } },
   );

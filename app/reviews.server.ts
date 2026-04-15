@@ -144,6 +144,15 @@ export async function approveReview(reviewId: string, shop: string): Promise<voi
 
   await prisma.review.update({ where: { id: reviewId }, data: { status: "approved" } });
 
+  // Mark pending videos as ready so the storefront widget can display them.
+  // Raw upload is served directly until a transcoding worker sets r2KeyProcessed.
+  if (review.videos.length > 0) {
+    await prisma.reviewVideo.updateMany({
+      where: { reviewId, status: "pending" },
+      data: { status: "ready" },
+    });
+  }
+
   if (review.customerId) {
     await awardPointsForReview(review.customerId, shop, review.videos.length > 0);
   }

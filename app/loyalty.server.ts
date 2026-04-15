@@ -478,6 +478,75 @@ export async function deleteReward(id: string) {
 
 // ─── Award points for an approved review ─────────────────────────────────────
 
+// ─── Process a reward redemption ─────────────────────────────────────────────
+
+export interface RedemptionResult {
+  success: boolean;
+  pointsSpent: number;
+  newBalance: number;
+  error?: string;
+}
+
+export async function processRedemption(
+  shop: string,
+  shopifyCustomerId: string,
+  rewardId: string,
+  discountCode: string,
+): Promise<RedemptionResult> {
+  const [customer, reward, config] = await Promise.all([
+    prisma.customer.findUnique({ where: { shopifyCustomerId } }),
+    prisma.reward.findUnique({ where: { id: rewardId } }),
+    getShopConfig(shop),
+  ]);
+
+  if (!customer || customer.shop !== shop) {
+    return { success: false, pointsSpent: 0, newBalance: 0, error: "Customer not found" };
+  }
+  if (!reward || reward.shop !== shop || !reward.isActive) {
+    return { success: false, pointsSpent: 0, newBalance: 0, error: "Reward not available" };
+  }
+  if (customer.pointsBalance < reward.pointsCost) {
+    return {
+      success: false,
+      pointsSpent: 0,
+      newBalance: customer.pointsBalance,
+      error: "Insufficient points",
+    };
+  }
+
+  const newBalance = customer.pointsBalance - reward.pointsCost;
+  const newTier = getTierForPoints(newBalance, config.tiers);
+  const newExpiry = newBalance > 0 ? addMonths(new Date(), config.expiryMonths) : null;
+
+  await prisma.$transaction([
+    prisma.redemption.create({
+      data: {
+        customerId: customer.id,
+        rewardId,
+        pointsSpent: reward.pointsCost,
+        discountCode,
+        status: "fulfilled",
+      },
+    }),
+    prisma.transaction.create({
+      data: {
+        customerId: customer.id,
+        type: "redeem",
+        points: -reward.pointsCost,
+        description: `Redeemed: ${reward.name}`,
+      },
+    }),
+    prisma.customer.update({
+      where: { id: customer.id },
+      data: { pointsBalance: newBalance, tier: newTier.name, pointsExpiresAt: newExpiry },
+    }),
+  ]);
+
+  return { success: true, pointsSpent: reward.pointsCost, newBalance };
+}
+
+// ─── Award points for an approved review ─────────────────────────────────────
+
 export async function awardPointsForReview(
   customerId: string,
   shop: string,

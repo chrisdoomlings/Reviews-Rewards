@@ -90,8 +90,21 @@
     '.dl-reviews__page-btn:hover:not(:disabled){border-color:var(--dl-accent);color:var(--dl-accent)}',
     '.dl-reviews__page-btn:disabled{opacity:.4;cursor:not-allowed}',
 
+    '.dl-reviews__already-reviewed{margin:20px 0 4px;font-size:13px;color:#166534;background:#dcfce7;padding:10px 14px;border-radius:6px}',
     '.dl-reviews__empty{padding:28px 0;text-align:center;color:#9ca3af;font-size:14px}',
     '.dl-reviews__loading-msg{padding:20px 0;color:#9ca3af;font-size:14px}',
+
+    /* Lightbox */
+    '.dl-lightbox{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:99999;display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity .2s;pointer-events:none}',
+    '.dl-lightbox.dl-lightbox--open{opacity:1;pointer-events:all}',
+    '.dl-lightbox__img{max-width:min(90vw,960px);max-height:85vh;object-fit:contain;border-radius:4px;display:block;transition:opacity .15s;user-select:none}',
+    '.dl-lightbox__img.dl-lightbox__img--fade{opacity:0}',
+    '.dl-lightbox__close{position:absolute;top:16px;right:16px;background:rgba(255,255,255,.15);border:none;color:#fff;width:38px;height:38px;border-radius:50%;font-size:22px;cursor:pointer;display:flex;align-items:center;justify-content:center;line-height:1}',
+    '.dl-lightbox__close:hover,.dl-lightbox__arrow:hover{background:rgba(255,255,255,.3)}',
+    '.dl-lightbox__arrow{position:absolute;top:50%;transform:translateY(-50%);background:rgba(255,255,255,.15);border:none;color:#fff;width:44px;height:44px;border-radius:50%;font-size:26px;cursor:pointer;display:flex;align-items:center;justify-content:center}',
+    '.dl-lightbox__arrow--prev{left:16px}',
+    '.dl-lightbox__arrow--next{right:16px}',
+    '.dl-lightbox__counter{position:absolute;bottom:20px;left:50%;transform:translateX(-50%);color:rgba(255,255,255,.75);font-size:13px;background:rgba(0,0,0,.4);padding:4px 14px;border-radius:99px;white-space:nowrap}',
   ].join('');
 
   // ─── Helpers ───────────────────────────────────────────────────────────────
@@ -130,6 +143,102 @@
     } catch (e) {
       return iso;
     }
+  }
+
+  // ─── Lightbox singleton ────────────────────────────────────────────────────
+
+  var _lightboxInstance = null;
+
+  function getLightbox() {
+    if (_lightboxInstance) return _lightboxInstance;
+
+    var overlay  = document.createElement('div');
+    var img      = document.createElement('img');
+    var closeBtn = document.createElement('button');
+    var prevBtn  = document.createElement('button');
+    var nextBtn  = document.createElement('button');
+    var counter  = document.createElement('div');
+
+    overlay.className  = 'dl-lightbox';
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-modal', 'true');
+    img.className      = 'dl-lightbox__img';
+    img.alt            = 'Review photo';
+    closeBtn.className = 'dl-lightbox__close';
+    closeBtn.setAttribute('aria-label', 'Close');
+    closeBtn.innerHTML = '&times;';
+    prevBtn.className  = 'dl-lightbox__arrow dl-lightbox__arrow--prev';
+    prevBtn.setAttribute('aria-label', 'Previous photo');
+    prevBtn.innerHTML  = '&#8249;';
+    nextBtn.className  = 'dl-lightbox__arrow dl-lightbox__arrow--next';
+    nextBtn.setAttribute('aria-label', 'Next photo');
+    nextBtn.innerHTML  = '&#8250;';
+    counter.className  = 'dl-lightbox__counter';
+
+    overlay.appendChild(closeBtn);
+    overlay.appendChild(prevBtn);
+    overlay.appendChild(img);
+    overlay.appendChild(nextBtn);
+    overlay.appendChild(counter);
+    document.body.appendChild(overlay);
+
+    var photos  = [];
+    var current = 0;
+
+    function show(index) {
+      current = ((index % photos.length) + photos.length) % photos.length;
+      img.classList.add('dl-lightbox__img--fade');
+      var src = photos[current].url;
+      var tmp = new Image();
+      tmp.onload = function () {
+        img.src = src;
+        img.classList.remove('dl-lightbox__img--fade');
+      };
+      tmp.src = src;
+      var single = photos.length <= 1;
+      prevBtn.style.display  = single ? 'none' : '';
+      nextBtn.style.display  = single ? 'none' : '';
+      counter.style.display  = single ? 'none' : '';
+      counter.textContent    = (current + 1) + ' \u2f ' + photos.length;
+    }
+
+    function close() {
+      overlay.classList.remove('dl-lightbox--open');
+      document.body.style.overflow = '';
+      document.removeEventListener('keydown', onKey);
+    }
+
+    function onKey(e) {
+      if (e.key === 'Escape')      { close(); }
+      if (e.key === 'ArrowLeft')   { show(current - 1); }
+      if (e.key === 'ArrowRight')  { show(current + 1); }
+    }
+
+    prevBtn.addEventListener('click',  function () { show(current - 1); });
+    nextBtn.addEventListener('click',  function () { show(current + 1); });
+    closeBtn.addEventListener('click', close);
+    overlay.addEventListener('click',  function (e) { if (e.target === overlay) close(); });
+
+    // Touch swipe
+    var touchStartX = 0;
+    overlay.addEventListener('touchstart', function (e) {
+      touchStartX = e.touches[0].clientX;
+    }, { passive: true });
+    overlay.addEventListener('touchend', function (e) {
+      var dx = e.changedTouches[0].clientX - touchStartX;
+      if (Math.abs(dx) > 50) { show(dx < 0 ? current + 1 : current - 1); }
+    }, { passive: true });
+
+    _lightboxInstance = {
+      open: function (photoList, startIndex) {
+        photos = photoList;
+        show(startIndex || 0);
+        overlay.classList.add('dl-lightbox--open');
+        document.body.style.overflow = 'hidden';
+        document.addEventListener('keydown', onKey);
+      },
+    };
+    return _lightboxInstance;
   }
 
   // ─── Main widget class ─────────────────────────────────────────────────────
@@ -172,7 +281,8 @@
       + '/api/reviews/product/' + encodeURIComponent(self.cfg.productId)
       + '?shop=' + encodeURIComponent(self.cfg.shop)
       + '&page=' + self.page
-      + '&limit=' + self.cfg.perPage;
+      + '&limit=' + self.cfg.perPage
+      + (self.cfg.customerId ? '&customerId=' + encodeURIComponent(self.cfg.customerId) : '');
 
     fetch(url)
       .then(function (r) { return r.json(); })
@@ -216,9 +326,14 @@
       this.el.appendChild(this._buildPagination(d));
     }
 
-    // Write-review button
+    // Write-review button / already-reviewed notice
     if (this.cfg.showForm) {
-      if (this.formOpen) {
+      if (d.customerHasReviewed) {
+        var notice = document.createElement('p');
+        notice.className = 'dl-reviews__already-reviewed';
+        notice.textContent = 'You\u2019ve already reviewed this product. Thank you!';
+        this.el.appendChild(notice);
+      } else if (this.formOpen) {
         this.el.appendChild(this._buildForm());
       } else {
         var btn = document.createElement('button');
@@ -282,32 +397,46 @@
     if (r.title) bodyHtml += '<p class="dl-reviews__card-title">' + esc(r.title) + '</p>';
     if (r.body) bodyHtml += '<p class="dl-reviews__card-body">' + esc(r.body) + '</p>';
 
-    // Photos
-    var photosHtml = '';
+    li.innerHTML = headerHtml + bodyHtml;
+
+    // Photos — built as DOM so each gets a click handler for the lightbox
     if (r.photos && r.photos.length > 0) {
-      photosHtml = '<div class="dl-reviews__photos">';
-      r.photos.forEach(function (p) {
-        photosHtml += '<img class="dl-reviews__photo" src="' + esc(p.url) + '" alt="Review photo" loading="lazy">';
+      var photosDiv = document.createElement('div');
+      photosDiv.className = 'dl-reviews__photos';
+      r.photos.forEach(function (p, idx) {
+        var imgEl = document.createElement('img');
+        imgEl.className = 'dl-reviews__photo';
+        imgEl.src = p.url;
+        imgEl.alt = 'Review photo ' + (idx + 1);
+        imgEl.loading = 'lazy';
+        imgEl.style.cursor = 'zoom-in';
+        imgEl.addEventListener('click', function () {
+          getLightbox().open(r.photos, idx);
+        });
+        photosDiv.appendChild(imgEl);
       });
-      photosHtml += '</div>';
+      li.appendChild(photosDiv);
     }
 
     // Video (only status=ready, url present)
-    var videoHtml = '';
     if (r.videos && r.videos.length > 0 && r.videos[0].url) {
-      videoHtml = '<video class="dl-reviews__video" src="' + esc(r.videos[0].url) + '" controls preload="none"></video>';
+      var video = document.createElement('video');
+      video.className = 'dl-reviews__video';
+      video.src = r.videos[0].url;
+      video.controls = true;
+      video.preload = 'none';
+      li.appendChild(video);
     }
 
     // Admin reply
-    var replyHtml = '';
     if (r.adminReply) {
-      replyHtml = '<div class="dl-reviews__admin-reply">'
-        + '<div class="dl-reviews__admin-reply-label">Response from Doomlings</div>'
-        + '<p class="dl-reviews__admin-reply-body">' + esc(r.adminReply) + '</p>'
-        + '</div>';
+      var replyDiv = document.createElement('div');
+      replyDiv.className = 'dl-reviews__admin-reply';
+      replyDiv.innerHTML = '<div class="dl-reviews__admin-reply-label">Response from Doomlings</div>'
+        + '<p class="dl-reviews__admin-reply-body">' + esc(r.adminReply) + '</p>';
+      li.appendChild(replyDiv);
     }
 
-    li.innerHTML = headerHtml + bodyHtml + photosHtml + videoHtml + replyHtml;
     return li;
   };
 
@@ -610,6 +739,14 @@
         }),
       });
     }).then(function (r) {
+      if (r.status === 409) {
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Submit Review';
+        msg.className = 'dl-reviews__msg dl-reviews__msg--err';
+        msg.textContent = 'You\u2019ve already reviewed this product.';
+        msg.style.display = '';
+        return;
+      }
       if (!r.ok) throw new Error('Submission failed');
       submitBtn.disabled = false;
       submitBtn.textContent = 'Submit Review';

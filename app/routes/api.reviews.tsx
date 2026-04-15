@@ -53,6 +53,20 @@ export async function action({ request }: ActionFunctionArgs) {
     if (customer) customerId = customer.id;
   }
 
+  // One review per customer per product
+  if (customerId) {
+    const existing = await prisma.review.findFirst({
+      where: { customerId, shopifyProductId },
+      select: { id: true },
+    });
+    if (existing) {
+      return corsJson(
+        { error: "You have already reviewed this product.", code: "already_reviewed" },
+        { status: 409 },
+      );
+    }
+  }
+
   // Verified purchase: customer must have an earn transaction for this order
   let verifiedPurchase = false;
   if (shopifyOrderId && customerId) {

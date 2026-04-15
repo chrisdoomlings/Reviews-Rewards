@@ -54,14 +54,24 @@
     '.dl-loyalty__tx-pts--redeem,.dl-loyalty__tx-pts--expire{color:#dc2626}',
 
     /* Rewards */
-    '.dl-loyalty__rewards-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px}',
-    '.dl-loyalty__reward{border:1px solid #e5e7eb;border-radius:10px;padding:14px;background:#fff}',
+    '.dl-loyalty__rewards-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px}',
+    '.dl-loyalty__reward{border:1px solid #e5e7eb;border-radius:10px;padding:14px;background:#fff;display:flex;flex-direction:column}',
     '.dl-loyalty__reward-name{font-size:14px;font-weight:700;margin-bottom:4px}',
-    '.dl-loyalty__reward-desc{font-size:12px;color:#6b7280;margin-bottom:10px;min-height:28px}',
-    '.dl-loyalty__reward-cost{font-size:13px;font-weight:700;color:var(--dl-accent);margin-bottom:8px}',
-    '.dl-loyalty__reward-status{font-size:12px;font-weight:600;padding:4px 10px;border-radius:99px;display:inline-block}',
-    '.dl-loyalty__reward-status--can{background:#dcfce7;color:#166534}',
-    '.dl-loyalty__reward-status--cant{background:#f3f4f6;color:#9ca3af}',
+    '.dl-loyalty__reward-desc{font-size:12px;color:#6b7280;margin-bottom:10px;flex:1}',
+    '.dl-loyalty__reward-cost{font-size:13px;font-weight:700;color:var(--dl-accent);margin-bottom:10px}',
+    '.dl-loyalty__redeem-btn{width:100%;padding:8px 12px;background:var(--dl-accent);color:#fff;border:none;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer}',
+    '.dl-loyalty__redeem-btn:hover{opacity:.9}',
+    '.dl-loyalty__redeem-btn:disabled{opacity:.5;cursor:not-allowed}',
+    '.dl-loyalty__cant-redeem{font-size:12px;color:#9ca3af;text-align:center;padding:6px 0}',
+
+    /* Code reveal */
+    '.dl-loyalty__code-wrap{margin-top:10px;padding:10px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px}',
+    '.dl-loyalty__code-label{font-size:11px;font-weight:700;color:#166534;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px}',
+    '.dl-loyalty__code-row{display:flex;align-items:center;gap:6px}',
+    '.dl-loyalty__code{font-family:monospace;font-size:15px;font-weight:800;color:#166534;letter-spacing:.08em;flex:1}',
+    '.dl-loyalty__copy-btn{padding:4px 10px;border:1px solid #16a34a;border-radius:4px;background:#fff;color:#16a34a;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap}',
+    '.dl-loyalty__copy-btn:hover{background:#dcfce7}',
+    '.dl-loyalty__code-hint{font-size:11px;color:#6b7280;margin-top:6px}',
 
     /* States */
     '.dl-loyalty__loading{padding:20px 0;color:#9ca3af;font-size:14px}',
@@ -306,12 +316,38 @@
 
         var canRedeem = loyalty.pointsBalance >= rw.pointsCost;
 
-        card.innerHTML = '<div class="dl-loyalty__reward-name">' + esc(rw.name) + '</div>'
-          + '<div class="dl-loyalty__reward-desc">' + esc(rw.description || '') + '</div>'
-          + '<div class="dl-loyalty__reward-cost">' + esc(rw.pointsCost.toLocaleString()) + ' pts</div>'
-          + '<span class="dl-loyalty__reward-status '
-          + (canRedeem ? 'dl-loyalty__reward-status--can' : 'dl-loyalty__reward-status--cant') + '">'
-          + (canRedeem ? 'Redeemable' : 'Need more points') + '</span>';
+        // Static info
+        var nameEl = document.createElement('div');
+        nameEl.className = 'dl-loyalty__reward-name';
+        nameEl.textContent = rw.name;
+
+        var descEl = document.createElement('div');
+        descEl.className = 'dl-loyalty__reward-desc';
+        descEl.textContent = rw.description || '';
+
+        var costEl = document.createElement('div');
+        costEl.className = 'dl-loyalty__reward-cost';
+        costEl.textContent = rw.pointsCost.toLocaleString() + ' pts';
+
+        card.appendChild(nameEl);
+        card.appendChild(descEl);
+        card.appendChild(costEl);
+
+        if (canRedeem) {
+          var redeemBtn = document.createElement('button');
+          redeemBtn.className = 'dl-loyalty__redeem-btn';
+          redeemBtn.textContent = 'Redeem';
+          redeemBtn.addEventListener('click', function () {
+            self._redeem(rw, card, redeemBtn, loyalty);
+          });
+          card.appendChild(redeemBtn);
+        } else {
+          var cantEl = document.createElement('div');
+          cantEl.className = 'dl-loyalty__cant-redeem';
+          var needed = rw.pointsCost - loyalty.pointsBalance;
+          cantEl.textContent = needed.toLocaleString() + ' more pts needed';
+          card.appendChild(cantEl);
+        }
 
         rwList.appendChild(card);
       });
@@ -320,6 +356,98 @@
     }
 
     self.el.appendChild(rwSection);
+  };
+
+  // ─── Redeem a reward ───────────────────────────────────────────────────────
+
+  LoyaltyWidget.prototype._redeem = function (rw, card, btn, loyalty) {
+    var self = this;
+    btn.disabled = true;
+    btn.textContent = 'Redeeming\u2026';
+
+    fetch(self.cfg.appUrl + '/api/loyalty/redeem', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        shop: self.cfg.shop,
+        shopifyCustomerId: self.cfg.customerId,
+        rewardId: rw.id,
+      }),
+    })
+      .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, data: d }; }); })
+      .then(function (result) {
+        if (!result.ok) {
+          btn.disabled = false;
+          btn.textContent = 'Redeem';
+          var errEl = document.createElement('div');
+          errEl.style.cssText = 'font-size:12px;color:#dc2626;margin-top:6px';
+          errEl.textContent = result.data.error || 'Something went wrong.';
+          card.appendChild(errEl);
+          return;
+        }
+
+        // Remove the redeem button
+        card.removeChild(btn);
+
+        // Show the discount code
+        var codeWrap = document.createElement('div');
+        codeWrap.className = 'dl-loyalty__code-wrap';
+
+        var codeLabel = document.createElement('div');
+        codeLabel.className = 'dl-loyalty__code-label';
+        codeLabel.textContent = 'Your discount code';
+
+        var codeRow = document.createElement('div');
+        codeRow.className = 'dl-loyalty__code-row';
+
+        var codeEl = document.createElement('div');
+        codeEl.className = 'dl-loyalty__code';
+        codeEl.textContent = result.data.discountCode;
+
+        var copyBtn = document.createElement('button');
+        copyBtn.className = 'dl-loyalty__copy-btn';
+        copyBtn.textContent = 'Copy';
+        copyBtn.addEventListener('click', function () {
+          navigator.clipboard.writeText(result.data.discountCode).then(function () {
+            copyBtn.textContent = 'Copied!';
+            setTimeout(function () { copyBtn.textContent = 'Copy'; }, 2000);
+          }).catch(function () {
+            // Fallback for browsers without clipboard API
+            var ta = document.createElement('textarea');
+            ta.value = result.data.discountCode;
+            ta.style.position = 'fixed';
+            ta.style.opacity = '0';
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand('copy');
+            document.body.removeChild(ta);
+            copyBtn.textContent = 'Copied!';
+            setTimeout(function () { copyBtn.textContent = 'Copy'; }, 2000);
+          });
+        });
+
+        var hint = document.createElement('div');
+        hint.className = 'dl-loyalty__code-hint';
+        hint.textContent = 'Apply at checkout. Single use.';
+
+        codeRow.appendChild(codeEl);
+        codeRow.appendChild(copyBtn);
+        codeWrap.appendChild(codeLabel);
+        codeWrap.appendChild(codeRow);
+        codeWrap.appendChild(hint);
+        card.appendChild(codeWrap);
+
+        // Update the balance display at the top
+        var balanceEl = self.el.querySelector('.dl-loyalty__balance');
+        if (balanceEl) {
+          balanceEl.innerHTML = result.data.newBalance.toLocaleString()
+            + '<span class="dl-loyalty__balance-unit">pts</span>';
+        }
+      })
+      .catch(function () {
+        btn.disabled = false;
+        btn.textContent = 'Redeem';
+      });
   };
 
   // ─── Bootstrap ─────────────────────────────────────────────────────────────
