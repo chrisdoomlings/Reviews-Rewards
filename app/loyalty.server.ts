@@ -26,6 +26,11 @@ export interface EarningRulesConfig {
   videoReviewPoints: number;
 }
 
+export interface ReviewSettingsConfig {
+  flagKeywords: string[];
+  lowStarThreshold: number;
+}
+
 export interface ShopConfigData {
   pointsCurrencyName: string;
   expiryMonths: number;
@@ -34,6 +39,7 @@ export interface ShopConfigData {
   silentReauthDays: number;
   tiers: TierConfig[];
   earningRules: EarningRulesConfig;
+  reviewSettings: ReviewSettingsConfig;
 }
 
 // ─── Defaults ─────────────────────────────────────────────────────────────────
@@ -58,6 +64,10 @@ const DEFAULT_SHOP_CONFIG: ShopConfigData = {
     videoReviewEnabled: true,
     videoReviewPoints: 50,
   },
+  reviewSettings: {
+    flagKeywords: ["spam", "discount", "cheap", "external link"],
+    lowStarThreshold: 2,
+  },
 };
 
 // ─── Shop config ──────────────────────────────────────────────────────────────
@@ -71,19 +81,38 @@ export async function getShopConfig(shop: string): Promise<ShopConfigData> {
     ...stored,
     tiers: stored.tiers ?? DEFAULT_SHOP_CONFIG.tiers,
     earningRules: stored.earningRules
-      ? { ...DEFAULT_SHOP_CONFIG.earningRules, ...stored.earningRules }
+      ? { ...DEFAULT_SHOP_CONFIG.earningRules, ...(stored.earningRules as Partial<EarningRulesConfig>) }
       : DEFAULT_SHOP_CONFIG.earningRules,
+    reviewSettings: stored.reviewSettings
+      ? { ...DEFAULT_SHOP_CONFIG.reviewSettings, ...(stored.reviewSettings as Partial<ReviewSettingsConfig>) }
+      : DEFAULT_SHOP_CONFIG.reviewSettings,
   };
 }
 
-export async function saveShopConfig(shop: string, patch: Partial<ShopConfigData>): Promise<void> {
+type ShopConfigPatch = Partial<Omit<ShopConfigData, "earningRules" | "reviewSettings">> & {
+  earningRules?: Partial<EarningRulesConfig>;
+  reviewSettings?: Partial<ReviewSettingsConfig>;
+};
+
+export async function saveShopConfig(shop: string, patch: ShopConfigPatch): Promise<void> {
   const current = await getShopConfig(shop);
-  // JSON round-trip strips typed interfaces so Prisma accepts the value as Json.
-  const merged = JSON.parse(JSON.stringify({ ...current, ...patch }));
+  // Deep-merge nested objects so callers can patch a subset of earningRules/reviewSettings
+  // without wiping the other fields. JSON round-trip satisfies Prisma's Json type.
+  const merged: ShopConfigData = {
+    ...current,
+    ...patch,
+    tiers: patch.tiers ?? current.tiers,
+    earningRules: patch.earningRules
+      ? { ...current.earningRules, ...patch.earningRules }
+      : current.earningRules,
+    reviewSettings: patch.reviewSettings
+      ? { ...current.reviewSettings, ...patch.reviewSettings }
+      : current.reviewSettings,
+  };
   await prisma.shopConfig.upsert({
     where: { shop },
-    create: { shop, config: merged },
-    update: { config: merged },
+    create: { shop, config: JSON.parse(JSON.stringify(merged)) },
+    update: { config: JSON.parse(JSON.stringify(merged)) },
   });
 }
 
@@ -445,4 +474,42 @@ export async function toggleRewardActive(id: string, isActive: boolean) {
 
 export async function deleteReward(id: string) {
   return prisma.reward.delete({ where: { id } });
+}
+
+// ─── Award points for an approved review ─────────────────────────────────────
+
+export async function awardPointsForReview(
+  customerId: string,
+  shop: string,
+  hasVideo: boolean,
+): Promise<void> {
+  const config = await getShopConfig(shop);
+  if (!config.earningRules.textReviewEnabled) return;
+
+  let pointsToAward = config.earningRules.textReviewPoints;
+  let description = "Approved text review";
+
+  if (hasVideo && config.earningRules.videoReviewEnabled) {
+    pointsToAward += config.earningRules.videoReviewPoints;
+    description = "Approved video review";
+  }
+
+  if (pointsToAward <= 0) return;
+
+  const customer = await prisma.customer.findUnique({ where: { id: customerId } });
+  if (!customer) return;
+
+  const newBalance = customer.pointsBalance + pointsToAward;
+  const newTier = getTierForPoints(newBalance, config.tiers);
+  const newExpiry = addMonths(new Date(), config.expiryMonths);
+
+  await prisma.$transaction([
+    prisma.transaction.create({
+      data: { customerId, type: "earn", points: pointsToAward, description },
+    }),
+    prisma.customer.update({
+      where: { id: customerId },
+      data: { pointsBalance: newBalance, tier: newTier.name, pointsExpiresAt: newExpiry },
+    }),
+  ]);
 }
