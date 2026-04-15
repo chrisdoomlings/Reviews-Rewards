@@ -1,201 +1,152 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { CSSProperties } from "react";
-import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
+import { Form, useLoaderData, useFetcher } from "react-router";
+import type { ActionFunctionArgs, HeadersFunction, LoaderFunctionArgs } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
-
 import { authenticate } from "../shopify.server";
+import {
+  getShopConfig,
+  saveShopConfig,
+  getOverviewStats,
+  getTierCounts,
+  getMembers,
+  getRewards,
+  createReward,
+  updateReward,
+  toggleRewardActive,
+  deleteReward,
+  type ShopConfigData,
+  type TierConfig,
+} from "../loyalty.server";
+
+// ─── Loader ───────────────────────────────────────────────────────────────────
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  await authenticate.admin(request);
-  return {};
+  const { session } = await authenticate.admin(request);
+  const { shop } = session;
+
+  const url = new URL(request.url);
+  const search = url.searchParams.get("search") ?? "";
+  const page = Math.max(1, Number(url.searchParams.get("page") ?? "1"));
+
+  const [overviewStats, tierCounts, membersData, rewards, shopConfig] =
+    await Promise.all([
+      getOverviewStats(shop),
+      getTierCounts(shop),
+      getMembers(shop, { search, page }),
+      getRewards(shop),
+      getShopConfig(shop),
+    ]);
+
+  return {
+    shop,
+    search,
+    overviewStats,
+    tierCounts,
+    ...membersData,
+    rewards,
+    shopConfig,
+  };
 };
 
-type Tab =
-  | "overview"
-  | "members"
-  | "rules"
-  | "rewards"
-  | "tiers"
-  | "referrals"
-  | "settings";
+// ─── Action ───────────────────────────────────────────────────────────────────
 
-const tierCards = [
-  {
-    name: "Bronze",
-    threshold: "0-499 points",
-    multiplier: "1x",
-    members: 8421,
-    spend: "$58k",
-    color: "#b65b30",
-    background: "#fff4ee",
-  },
-  {
-    name: "Silver",
-    threshold: "500-1,499 points",
-    multiplier: "1.5x",
-    members: 6420,
-    spend: "$94k",
-    color: "#576f86",
-    background: "#f3f6f8",
-  },
-  {
-    name: "Gold",
-    threshold: "1,500+ points",
-    multiplier: "2x",
-    members: 3579,
-    spend: "$127k",
-    color: "#aa7600",
-    background: "#fff8e1",
-  },
-];
+export const action = async ({ request }: ActionFunctionArgs) => {
+  const { session } = await authenticate.admin(request);
+  const { shop } = session;
+  const formData = await request.formData();
+  const intent = String(formData.get("intent") ?? "");
 
-const members = [
-  {
-    name: "Sarah Mitchell",
-    email: "s.mitchell@email.com",
-    tier: "Gold",
-    balance: 2480,
-    lifetimeSpend: "$1,940",
-    reviewedOrders: 5,
-    lastSeen: "Today",
-    status: "Authenticated",
-  },
-  {
-    name: "James Rodriguez",
-    email: "j.rod@email.com",
-    tier: "Gold",
-    balance: 1840,
-    lifetimeSpend: "$1,210",
-    reviewedOrders: 4,
-    lastSeen: "Today",
-    status: "Redeemable",
-  },
-  {
-    name: "Emma Wilson",
-    email: "emma.w@email.com",
-    tier: "Silver",
-    balance: 920,
-    lifetimeSpend: "$684",
-    reviewedOrders: 3,
-    lastSeen: "Yesterday",
-    status: "Pending expiry",
-  },
-  {
-    name: "Mike Torres",
-    email: "mike.t@email.com",
-    tier: "Silver",
-    balance: 610,
-    lifetimeSpend: "$452",
-    reviewedOrders: 2,
-    lastSeen: "2 days ago",
-    status: "Authenticated",
-  },
-  {
-    name: "Amy Chen",
-    email: "amy.c@email.com",
-    tier: "Bronze",
-    balance: 110,
-    lifetimeSpend: "$86",
-    reviewedOrders: 1,
-    lastSeen: "5 days ago",
-    status: "Needs OTC",
-  },
-];
+  switch (intent) {
+    case "save-settings": {
+      await saveShopConfig(shop, {
+        pointsCurrencyName: String(formData.get("pointsCurrencyName") || "Doom Points"),
+        expiryMonths: Number(formData.get("expiryMonths") || 12),
+        expiryWarningDays: Number(formData.get("expiryWarningDays") || 30),
+        launcherPromptsEnabled: formData.get("launcherPromptsEnabled") === "true",
+        silentReauthDays: Number(formData.get("silentReauthDays") || 30),
+      });
+      return Response.json({ ok: true });
+    }
 
-const earningRulesSeed = [
-  {
-    id: 1,
-    action: "Purchase points",
-    description: "Base points granted per dollar spent before tier multipliers.",
-    points: "1 pt / $1",
-    enabled: true,
-    source: "Shopify order paid webhook",
-  },
-  {
-    id: 2,
-    action: "Text review",
-    description: "Awarded after a verified written review is approved.",
-    points: "75 pts",
-    enabled: true,
-    source: "Approved review",
-  },
-  {
-    id: 3,
-    action: "Video review bonus",
-    description: "Additional reward for approved short-form video review uploads.",
-    points: "+50 pts",
-    enabled: true,
-    source: "Approved review video",
-  },
-  {
-    id: 4,
-    action: "Referral purchase",
-    description: "Given to the referring customer after first successful order.",
-    points: "200 pts",
-    enabled: true,
-    source: "Referral conversion event",
-  },
-  {
-    id: 5,
-    action: "Birthday reward",
-    description: "Optional annual reward granted once during birthday month.",
-    points: "100 pts",
-    enabled: false,
-    source: "Scheduled job",
-  },
-];
+    case "save-tiers": {
+      const tiers = JSON.parse(String(formData.get("tiers"))) as TierConfig[];
+      await saveShopConfig(shop, { tiers });
+      return Response.json({ ok: true });
+    }
 
-const rewardsSeed = [
-  {
-    id: 1,
-    name: "$5 off order",
-    type: "Discount code",
-    cost: 500,
-    tier: "Any",
-    inventory: "Unlimited",
-    active: true,
-  },
-  {
-    id: 2,
-    name: "$10 off order",
-    type: "Discount code",
-    cost: 1000,
-    tier: "Silver+",
-    inventory: "Unlimited",
-    active: true,
-  },
-  {
-    id: 3,
-    name: "Free shipping",
-    type: "Shipping reward",
-    cost: 350,
-    tier: "Any",
-    inventory: "Unlimited",
-    active: true,
-  },
-  {
-    id: 4,
-    name: "Exclusive promo pack",
-    type: "Product reward",
-    cost: 1500,
-    tier: "Gold",
-    inventory: "42 left",
-    active: false,
-  },
-];
+    case "save-rules": {
+      await saveShopConfig(shop, {
+        earningRules: {
+          basePointsPerDollar: Number(formData.get("basePointsPerDollar") || 1),
+          purchaseEnabled: formData.get("purchaseEnabled") === "true",
+          textReviewEnabled: formData.get("textReviewEnabled") === "true",
+          textReviewPoints: Number(formData.get("textReviewPoints") || 75),
+          videoReviewEnabled: formData.get("videoReviewEnabled") === "true",
+          videoReviewPoints: Number(formData.get("videoReviewPoints") || 50),
+        },
+      });
+      return Response.json({ ok: true });
+    }
 
-const referrals = [
-  { customer: "Sarah Mitchell", sent: 8, converted: 4, points: 800 },
-  { customer: "James Rodriguez", sent: 5, converted: 3, points: 600 },
-  { customer: "Emma Wilson", sent: 3, converted: 1, points: 200 },
-];
+    case "create-reward": {
+      await createReward(shop, {
+        name: String(formData.get("name") || ""),
+        description: String(formData.get("description") || ""),
+        type: String(formData.get("type") || "discount_pct"),
+        value: String(formData.get("value") || ""),
+        pointsCost: Number(formData.get("pointsCost") || 0),
+      });
+      return Response.json({ ok: true });
+    }
 
-const statusPill: Record<string, { background: string; color: string }> = {
-  Authenticated: { background: "#dff7e5", color: "#0a7d45" },
-  Redeemable: { background: "#e8f2ff", color: "#005bd3" },
-  "Pending expiry": { background: "#fff1d6", color: "#9a6700" },
-  "Needs OTC": { background: "#fde8e8", color: "#b42318" },
+    case "update-reward": {
+      await updateReward(String(formData.get("id")), {
+        name: String(formData.get("name") || ""),
+        description: String(formData.get("description") || ""),
+        type: String(formData.get("type") || "discount_pct"),
+        value: String(formData.get("value") || ""),
+        pointsCost: Number(formData.get("pointsCost") || 0),
+      });
+      return Response.json({ ok: true });
+    }
+
+    case "toggle-reward": {
+      await toggleRewardActive(
+        String(formData.get("id")),
+        formData.get("isActive") === "true",
+      );
+      return Response.json({ ok: true });
+    }
+
+    case "delete-reward": {
+      await deleteReward(String(formData.get("id")));
+      return Response.json({ ok: true });
+    }
+
+    default:
+      return Response.json({ error: "Unknown intent" }, { status: 400 });
+  }
 };
+
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+type Tab = "overview" | "members" | "rules" | "rewards" | "tiers" | "referrals" | "settings";
+
+const TIER_COLORS: Record<string, { color: string; bg: string; border: string }> = {
+  bronze: { color: "#b65b30", bg: "#fff4ee", border: "#b65b3033" },
+  silver: { color: "#576f86", bg: "#f3f6f8", border: "#576f8633" },
+  gold:   { color: "#aa7600", bg: "#fff8e1", border: "#aa760033" },
+};
+const fallbackColor = { color: "#5c5f62", bg: "#f6f6f7", border: "#e1e3e5" };
+const tc = (name: string) => TIER_COLORS[name.toLowerCase()] ?? fallbackColor;
+
+const REWARD_TYPES = [
+  { value: "discount_pct",   label: "% discount" },
+  { value: "discount_fixed", label: "Fixed $ off" },
+  { value: "free_shipping",  label: "Free shipping" },
+  { value: "free_product",   label: "Free product" },
+];
 
 const styles = {
   tabBar: {
@@ -204,176 +155,178 @@ const styles = {
     margin: "-16px -16px 0",
     overflowX: "auto",
   } satisfies CSSProperties,
-  tabButton: (active: boolean) =>
-    ({
-      padding: "12px 16px",
-      border: "none",
-      background: "none",
-      borderBottom: active ? "2px solid #202223" : "2px solid transparent",
-      color: active ? "#202223" : "#5c5f62",
-      cursor: "pointer",
-      fontWeight: active ? 600 : 500,
-      fontSize: "13px",
-      whiteSpace: "nowrap",
-    }) satisfies CSSProperties,
-  cardGrid: {
-    display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-    gap: "12px",
-  } satisfies CSSProperties,
-  metricCard: {
+  tab: (active: boolean): CSSProperties => ({
+    padding: "12px 16px",
+    border: "none",
+    background: "none",
+    borderBottom: active ? "2px solid #202223" : "2px solid transparent",
+    color: active ? "#202223" : "#5c5f62",
+    cursor: "pointer",
+    fontWeight: active ? 600 : 500,
+    fontSize: "13px",
+    whiteSpace: "nowrap",
+  }),
+  card: {
     padding: "16px",
     border: "1px solid #e1e3e5",
     borderRadius: "12px",
     background: "#fff",
   } satisfies CSSProperties,
+  grid: (cols: string): CSSProperties => ({
+    display: "grid",
+    gridTemplateColumns: cols,
+    gap: "12px",
+  }),
+  muted: { fontSize: "13px", color: "#5c5f62" } satisfies CSSProperties,
+  pill: (active: boolean): CSSProperties => ({
+    display: "inline-flex",
+    padding: "3px 10px",
+    borderRadius: "999px",
+    background: active ? "#dff7e5" : "#eceeef",
+    color: active ? "#0a7d45" : "#5c5f62",
+    fontSize: "12px",
+    fontWeight: 600,
+  }),
+  th: {
+    textAlign: "left",
+    padding: "10px 12px",
+    color: "#5c5f62",
+    fontSize: "12px",
+    textTransform: "uppercase",
+    letterSpacing: "0.04em",
+  } satisfies CSSProperties,
+  td: { padding: "12px" } satisfies CSSProperties,
 };
 
+const EMPTY_REWARD = { name: "", description: "", type: "discount_pct", value: "", pointsCost: "" };
+
+// ─── Component ────────────────────────────────────────────────────────────────
+
 export default function Loyalty() {
+  const data = useLoaderData<typeof loader>();
+  const { overviewStats, tierCounts, members, memberTotal, memberPage, memberPageSize,
+          rewards, shopConfig } = data;
+
+  const fetcher = useFetcher<{ ok?: boolean }>();
+  const submitting = fetcher.state !== "idle";
+
+  // UI state
   const [activeTab, setActiveTab] = useState<Tab>("overview");
-  const [rules, setRules] = useState(earningRulesSeed);
-  const [rewards, setRewards] = useState(rewardsSeed);
-  const [pointsName, setPointsName] = useState("Doom Points");
-  const [expiryMonths, setExpiryMonths] = useState("12");
-  const [warningDays, setWarningDays] = useState("30");
-  const [referrerReward, setReferrerReward] = useState("200");
-  const [refereeReward, setRefereeReward] = useState("100");
-  const [launcherPrompt, setLauncherPrompt] = useState(true);
-  const [silentReauthDays, setSilentReauthDays] = useState("30");
+  const [rewardMode, setRewardMode] = useState<"none" | "add" | string>("none"); // "add" | rewardId
+  const [rewardForm, setRewardForm] = useState(EMPTY_REWARD);
+  const [editingTier, setEditingTier] = useState<string | null>(null);
+  const [tierForms, setTierForms] = useState<Record<string, { displayName: string; minPoints: string; earnMultiplier: string }>>({});
+
+  // Settings form — pre-seeded from loader data
+  const [settingsForm, setSettingsForm] = useState({
+    pointsCurrencyName: shopConfig.pointsCurrencyName,
+    expiryMonths: String(shopConfig.expiryMonths),
+    expiryWarningDays: String(shopConfig.expiryWarningDays),
+    launcherPromptsEnabled: shopConfig.launcherPromptsEnabled,
+    silentReauthDays: String(shopConfig.silentReauthDays),
+  });
+
+  // Close reward form after successful save
+  useEffect(() => {
+    if (fetcher.state === "idle" && fetcher.data?.ok) {
+      setRewardMode("none");
+      setRewardForm(EMPTY_REWARD);
+      setEditingTier(null);
+    }
+  }, [fetcher.state, fetcher.data]);
+
+  const openAddReward = () => { setRewardForm(EMPTY_REWARD); setRewardMode("add"); };
+  const openEditReward = (r: typeof rewards[number]) => {
+    setRewardForm({ name: r.name, description: r.description ?? "", type: r.type, value: r.value, pointsCost: String(r.pointsCost) });
+    setRewardMode(r.id);
+  };
+  const openEditTier = (t: TierConfig) => {
+    setTierForms((prev) => ({
+      ...prev,
+      [t.name]: { displayName: t.displayName, minPoints: String(t.minPoints), earnMultiplier: String(t.earnMultiplier) },
+    }));
+    setEditingTier(t.name);
+  };
+  const saveTier = (tierName: string) => {
+    const f = tierForms[tierName];
+    if (!f) return;
+    const updatedTiers = shopConfig.tiers.map((t) =>
+      t.name === tierName
+        ? { ...t, displayName: f.displayName, minPoints: Number(f.minPoints), earnMultiplier: Number(f.earnMultiplier) }
+        : t,
+    );
+    fetcher.submit({ intent: "save-tiers", tiers: JSON.stringify(updatedTiers) }, { method: "post" });
+  };
+  const submitToggleReward = (id: string, current: boolean) =>
+    fetcher.submit({ intent: "toggle-reward", id, isActive: String(!current) }, { method: "post" });
+  const submitDeleteReward = (id: string) =>
+    fetcher.submit({ intent: "delete-reward", id }, { method: "post" });
+
+  const totalPages = Math.ceil(memberTotal / memberPageSize);
 
   const tabs: { key: Tab; label: string }[] = [
-    { key: "overview", label: "Overview" },
-    { key: "members", label: `Members (${members.length})` },
-    { key: "rules", label: "Earning rules" },
-    { key: "rewards", label: "Rewards" },
-    { key: "tiers", label: "Tiers" },
+    { key: "overview",  label: "Overview" },
+    { key: "members",   label: `Members (${memberTotal})` },
+    { key: "rules",     label: "Earning rules" },
+    { key: "rewards",   label: "Rewards" },
+    { key: "tiers",     label: "Tiers" },
     { key: "referrals", label: "Referrals" },
-    { key: "settings", label: "Settings" },
+    { key: "settings",  label: "Settings" },
   ];
-
-  const toggleRule = (id: number) =>
-    setRules((current) =>
-      current.map((rule) =>
-        rule.id === id ? { ...rule, enabled: !rule.enabled } : rule,
-      ),
-    );
-
-  const toggleReward = (id: number) =>
-    setRewards((current) =>
-      current.map((reward) =>
-        reward.id === id ? { ...reward, active: !reward.active } : reward,
-      ),
-    );
 
   return (
     <s-page heading="Loyalty admin">
+      {/* Tab bar */}
       <s-section>
         <div style={styles.tabBar}>
           {tabs.map((tab) => (
-            <button
-              key={tab.key}
-              style={styles.tabButton(activeTab === tab.key)}
-              onClick={() => setActiveTab(tab.key)}
-            >
+            <button key={tab.key} style={styles.tab(activeTab === tab.key)} onClick={() => setActiveTab(tab.key)}>
               {tab.label}
             </button>
           ))}
         </div>
       </s-section>
 
+      {/* ── Overview ─────────────────────────────────────────────────────── */}
       {activeTab === "overview" && (
         <>
           <s-section heading="Program snapshot">
-            <div style={styles.cardGrid}>
-              <div style={styles.metricCard}>
-                <div style={{ fontSize: "12px", color: "#5c5f62", marginBottom: "6px" }}>
-                  Total points issued
+            <div style={styles.grid("repeat(auto-fit, minmax(200px, 1fr))")}>
+              {[
+                { label: "Total members",          value: overviewStats.totalMembers.toLocaleString() },
+                { label: "Points issued (all time)", value: overviewStats.totalPointsIssued.toLocaleString() },
+                { label: "Active rewards",          value: overviewStats.activeRewardsCount.toLocaleString() },
+                { label: "Expiring in 30 days",     value: overviewStats.expiringIn30Days.toLocaleString() },
+              ].map(({ label, value }) => (
+                <div key={label} style={styles.card}>
+                  <div style={{ ...styles.muted, marginBottom: "6px" }}>{label}</div>
+                  <div style={{ fontSize: "28px", fontWeight: 700 }}>{value}</div>
                 </div>
-                <div style={{ fontSize: "28px", fontWeight: 700 }}>12.4M</div>
-                <div style={{ fontSize: "13px", color: "#5c5f62", marginTop: "6px" }}>
-                  Includes migrated balances from Yotpo and live earn events.
-                </div>
-              </div>
-              <div style={styles.metricCard}>
-                <div style={{ fontSize: "12px", color: "#5c5f62", marginBottom: "6px" }}>
-                  Redeemed this month
-                </div>
-                <div style={{ fontSize: "28px", fontWeight: 700 }}>1,284</div>
-                <div style={{ fontSize: "13px", color: "#5c5f62", marginTop: "6px" }}>
-                  41% from customers returning through the persistent account layer.
-                </div>
-              </div>
-              <div style={styles.metricCard}>
-                <div style={{ fontSize: "12px", color: "#5c5f62", marginBottom: "6px" }}>
-                  Points expiring in 30 days
-                </div>
-                <div style={{ fontSize: "28px", fontWeight: 700 }}>82,450</div>
-                <div style={{ fontSize: "13px", color: "#5c5f62", marginTop: "6px" }}>
-                  Review member-facing warning placements before bulk expiration runs.
-                </div>
-              </div>
-              <div style={styles.metricCard}>
-                <div style={{ fontSize: "12px", color: "#5c5f62", marginBottom: "6px" }}>
-                  Silent re-auth success
-                </div>
-                <div style={{ fontSize: "28px", fontWeight: 700 }}>73%</div>
-                <div style={{ fontSize: "13px", color: "#5c5f62", marginTop: "6px" }}>
-                  Remaining sessions fall back to one-time code verification.
-                </div>
-              </div>
+              ))}
             </div>
           </s-section>
 
-          <s-section heading="Tier parity">
-            <div style={styles.cardGrid}>
-              {tierCards.map((tier) => (
-                <div
-                  key={tier.name}
-                  style={{
-                    padding: "18px",
-                    borderRadius: "14px",
-                    background: tier.background,
-                    border: `1px solid ${tier.color}33`,
-                  }}
-                >
-                  <div
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "flex-start",
-                      marginBottom: "14px",
-                    }}
-                  >
-                    <div>
-                      <div style={{ fontSize: "20px", fontWeight: 700, color: tier.color }}>
-                        {tier.name}
+          <s-section heading="Tier breakdown">
+            <div style={styles.grid("repeat(auto-fit, minmax(220px, 1fr))")}>
+              {shopConfig.tiers.map((tier) => {
+                const { color, bg, border } = tc(tier.name);
+                const count = tierCounts[tier.name] ?? 0;
+                return (
+                  <div key={tier.name} style={{ padding: "18px", borderRadius: "14px", background: bg, border: `1px solid ${border}` }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "14px" }}>
+                      <div>
+                        <div style={{ fontSize: "20px", fontWeight: 700, color }}>{tier.displayName}</div>
+                        <div style={styles.muted}>{tier.minPoints.toLocaleString()}+ pts</div>
                       </div>
-                      <div style={{ fontSize: "12px", color: "#5c5f62" }}>{tier.threshold}</div>
+                      <span style={{ background: "#fff", borderRadius: "999px", padding: "4px 10px", fontSize: "12px", fontWeight: 700 }}>
+                        {tier.earnMultiplier}x
+                      </span>
                     </div>
-                    <span
-                      style={{
-                        background: "#fff",
-                        borderRadius: "999px",
-                        padding: "4px 10px",
-                        fontSize: "12px",
-                        fontWeight: 700,
-                      }}
-                    >
-                      {tier.multiplier}
-                    </span>
+                    <div style={{ fontSize: "24px", fontWeight: 700 }}>{count.toLocaleString()}</div>
+                    <div style={styles.muted}>Members</div>
                   </div>
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: "12px" }}>
-                    <div>
-                      <div style={{ fontSize: "24px", fontWeight: 700 }}>{tier.members}</div>
-                      <div style={{ fontSize: "12px", color: "#5c5f62" }}>Members</div>
-                    </div>
-                    <div>
-                      <div style={{ fontSize: "24px", fontWeight: 700 }}>{tier.spend}</div>
-                      <div style={{ fontSize: "12px", color: "#5c5f62" }}>30d spend</div>
-                    </div>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </s-section>
 
@@ -384,17 +337,9 @@ export default function Loyalty() {
                 "Validate OTC and silent re-auth flows against Plus Multipass configuration.",
                 "QA proactive redeemable-point prompts on PDP, cart, and account entry points.",
               ].map((item) => (
-                <div
-                  key={item}
-                  style={{
-                    padding: "12px 14px",
-                    border: "1px solid #e1e3e5",
-                    borderRadius: "10px",
-                    background: "#fff",
-                  }}
-                >
+                <div key={item} style={{ padding: "12px 14px", border: "1px solid #e1e3e5", borderRadius: "10px", background: "#fff" }}>
                   <span style={{ fontWeight: 600, marginRight: "6px" }}>Check:</span>
-                  <span style={{ color: "#5c5f62" }}>{item}</span>
+                  <span style={styles.muted}>{item}</span>
                 </div>
               ))}
             </s-stack>
@@ -402,434 +347,363 @@ export default function Loyalty() {
         </>
       )}
 
+      {/* ── Members ──────────────────────────────────────────────────────── */}
       {activeTab === "members" && (
         <>
-          <s-section heading="Member controls">
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "minmax(0, 1.8fr) minmax(260px, 1fr)",
-                gap: "12px",
-              }}
-            >
-              <div
-                style={{
-                  border: "1px solid #e1e3e5",
-                  borderRadius: "12px",
-                  padding: "16px",
-                  background: "#fff",
-                }}
-              >
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: "12px" }}>
-                  <s-text-field label="Search members" value="" placeholder="Name, email, customer ID" />
-                  <s-select label="Tier">
-                    <s-option value="all">All tiers</s-option>
-                    <s-option value="bronze">Bronze</s-option>
-                    <s-option value="silver">Silver</s-option>
-                    <s-option value="gold">Gold</s-option>
-                  </s-select>
-                  <s-select label="Status">
-                    <s-option value="all">All statuses</s-option>
-                    <s-option value="redeemable">Redeemable</s-option>
-                    <s-option value="otc">Needs OTC</s-option>
-                    <s-option value="expiry">Pending expiry</s-option>
-                  </s-select>
-                </div>
+          <s-section heading="Search">
+            <Form method="get" style={{ display: "flex", gap: "8px", alignItems: "flex-end" }}>
+              <div style={{ flex: 1 }}>
+                <s-text-field name="search" label="Search members" defaultValue={data.search} placeholder="Email or name" />
               </div>
-              <div
-                style={{
-                  border: "1px solid #e1e3e5",
-                  borderRadius: "12px",
-                  padding: "16px",
-                  background: "#fafbfb",
-                }}
-              >
-                <div style={{ fontWeight: 600, marginBottom: "6px" }}>Operator shortcuts</div>
-                <div style={{ fontSize: "13px", color: "#5c5f62", marginBottom: "12px" }}>
-                  Use these controls when validating migration balances and customer sessions.
-                </div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
-                  <s-button variant="primary">Adjust balance</s-button>
-                  <s-button>View ledger</s-button>
-                  <s-button>Force OTC</s-button>
-                </div>
-              </div>
-            </div>
+              <s-button type="submit">Search</s-button>
+              {data.search && (
+                <s-button onClick={() => { window.location.href = window.location.pathname; }}>
+                  Clear
+                </s-button>
+              )}
+            </Form>
           </s-section>
 
-          <s-section heading="Members">
-            <div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px" }}>
-                <thead>
-                  <tr style={{ borderBottom: "1px solid #d2d5d8" }}>
-                    {[
-                      "Customer",
-                      "Tier",
-                      "Balance",
-                      "Lifetime spend",
-                      "Reviewed orders",
-                      "Last seen",
-                      "Status",
-                      "",
-                    ].map((header) => (
-                      <th
-                        key={header}
-                        style={{
-                          textAlign: "left",
-                          padding: "10px 12px",
-                          color: "#5c5f62",
-                          fontSize: "12px",
-                          textTransform: "uppercase",
-                          letterSpacing: "0.04em",
-                        }}
-                      >
-                        {header}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {members.map((member) => (
-                    <tr key={member.email} style={{ borderBottom: "1px solid #eceeef" }}>
-                      <td style={{ padding: "12px" }}>
-                        <div style={{ fontWeight: 600 }}>{member.name}</div>
-                        <div style={{ fontSize: "12px", color: "#5c5f62" }}>{member.email}</div>
-                      </td>
-                      <td style={{ padding: "12px" }}>{member.tier}</td>
-                      <td style={{ padding: "12px", fontWeight: 700 }}>
-                        {member.balance.toLocaleString()}
-                      </td>
-                      <td style={{ padding: "12px" }}>{member.lifetimeSpend}</td>
-                      <td style={{ padding: "12px" }}>{member.reviewedOrders}</td>
-                      <td style={{ padding: "12px", color: "#5c5f62" }}>{member.lastSeen}</td>
-                      <td style={{ padding: "12px" }}>
-                        <span
-                          style={{
-                            display: "inline-flex",
-                            padding: "3px 10px",
-                            borderRadius: "999px",
-                            background: statusPill[member.status].background,
-                            color: statusPill[member.status].color,
-                            fontSize: "12px",
-                            fontWeight: 600,
-                          }}
-                        >
-                          {member.status}
-                        </span>
-                      </td>
-                      <td style={{ padding: "12px" }}>
-                        <s-button>View</s-button>
-                      </td>
+          <s-section heading={`Members${data.search ? ` matching "${data.search}"` : ""}`}>
+            {members.length === 0 ? (
+              <div style={{ ...styles.muted, padding: "24px", textAlign: "center" }}>
+                {data.search ? "No members found." : "No members yet — they'll appear here after their first order."}
+              </div>
+            ) : (
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px" }}>
+                  <thead>
+                    <tr style={{ borderBottom: "1px solid #d2d5d8" }}>
+                      {["Customer", "Tier", "Balance", "Reviews", "Last activity", ""].map((h) => (
+                        <th key={h} style={styles.th}>{h}</th>
+                      ))}
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {members.map((m) => {
+                      const { color, bg } = tc(m.tier);
+                      const lastActivity = m.lastActivityAt
+                        ? new Date(m.lastActivityAt).toLocaleDateString()
+                        : "—";
+                      return (
+                        <tr key={m.id} style={{ borderBottom: "1px solid #eceeef" }}>
+                          <td style={styles.td}>
+                            <div style={{ fontWeight: 600 }}>
+                              {m.firstName || m.lastName ? `${m.firstName ?? ""} ${m.lastName ?? ""}`.trim() : "—"}
+                            </div>
+                            <div style={styles.muted}>{m.email}</div>
+                          </td>
+                          <td style={styles.td}>
+                            <span style={{ background: bg, color, borderRadius: "999px", padding: "3px 10px", fontSize: "12px", fontWeight: 600 }}>
+                              {m.tier}
+                            </span>
+                            {m.expiringSoon && (
+                              <span style={{ marginLeft: "6px", background: "#fff1d6", color: "#9a6700", borderRadius: "999px", padding: "3px 8px", fontSize: "11px" }}>
+                                expiring
+                              </span>
+                            )}
+                          </td>
+                          <td style={{ ...styles.td, fontWeight: 700 }}>{m.pointsBalance.toLocaleString()}</td>
+                          <td style={styles.td}>{m.reviewCount}</td>
+                          <td style={{ ...styles.td, ...styles.muted }}>{lastActivity}</td>
+                          <td style={styles.td}><s-button>View</s-button></td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {totalPages > 1 && (
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "16px", ...styles.muted }}>
+                <span>Page {memberPage} of {totalPages} ({memberTotal} members)</span>
+                <div style={{ display: "flex", gap: "8px" }}>
+                  {memberPage > 1 && (
+                    <Form method="get"><input type="hidden" name="search" value={data.search} /><input type="hidden" name="page" value={memberPage - 1} /><s-button type="submit">Previous</s-button></Form>
+                  )}
+                  {memberPage < totalPages && (
+                    <Form method="get"><input type="hidden" name="search" value={data.search} /><input type="hidden" name="page" value={memberPage + 1} /><s-button type="submit">Next</s-button></Form>
+                  )}
+                </div>
+              </div>
+            )}
           </s-section>
         </>
       )}
 
+      {/* ── Earning rules ────────────────────────────────────────────────── */}
       {activeTab === "rules" && (
         <s-section heading="Earning rules">
-          <s-stack direction="block" gap="base">
-            {rules.map((rule) => (
-              <div
-                key={rule.id}
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "minmax(0, 1.7fr) minmax(120px, auto) minmax(220px, auto)",
-                  gap: "16px",
-                  alignItems: "center",
-                  padding: "16px",
-                  border: "1px solid #e1e3e5",
-                  borderRadius: "12px",
-                  background: "#fff",
-                  opacity: rule.enabled ? 1 : 0.65,
-                }}
-              >
-                <div>
-                  <div style={{ fontWeight: 600, marginBottom: "4px" }}>{rule.action}</div>
-                  <div style={{ fontSize: "13px", color: "#5c5f62", marginBottom: "4px" }}>
-                    {rule.description}
+          <fetcher.Form method="post">
+            <input type="hidden" name="intent" value="save-rules" />
+            <input type="hidden" name="purchaseEnabled" value={String(shopConfig.earningRules.purchaseEnabled)} />
+            <input type="hidden" name="textReviewEnabled" value={String(shopConfig.earningRules.textReviewEnabled)} />
+            <input type="hidden" name="videoReviewEnabled" value={String(shopConfig.earningRules.videoReviewEnabled)} />
+            <s-stack direction="block" gap="base">
+              {[
+                {
+                  label: "Purchase points",
+                  description: "Points granted per dollar spent before tier multiplier.",
+                  source: "orders/paid webhook",
+                  enabled: shopConfig.earningRules.purchaseEnabled,
+                  field: (
+                    <s-text-field
+                      label="Points per $1"
+                      name="basePointsPerDollar"
+                      value={String(shopConfig.earningRules.basePointsPerDollar)}
+                    />
+                  ),
+                },
+                {
+                  label: "Written review",
+                  description: "Awarded after a verified written review is approved.",
+                  source: "Approved review",
+                  enabled: shopConfig.earningRules.textReviewEnabled,
+                  field: (
+                    <s-text-field
+                      label="Points"
+                      name="textReviewPoints"
+                      value={String(shopConfig.earningRules.textReviewPoints)}
+                    />
+                  ),
+                },
+                {
+                  label: "Video review bonus",
+                  description: "Additional reward for approved video attached to a review.",
+                  source: "Approved review video",
+                  enabled: shopConfig.earningRules.videoReviewEnabled,
+                  field: (
+                    <s-text-field
+                      label="Points"
+                      name="videoReviewPoints"
+                      value={String(shopConfig.earningRules.videoReviewPoints)}
+                    />
+                  ),
+                },
+              ].map((rule) => (
+                <div key={rule.label} style={{ ...styles.card, opacity: rule.enabled ? 1 : 0.6 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 160px", gap: "16px", alignItems: "center" }}>
+                    <div>
+                      <div style={{ fontWeight: 600, marginBottom: "4px" }}>{rule.label}</div>
+                      <div style={{ ...styles.muted, marginBottom: "4px" }}>{rule.description}</div>
+                      <div style={{ fontSize: "12px", color: "#5c5f62" }}>Source: {rule.source}</div>
+                    </div>
+                    {rule.field}
                   </div>
-                  <div style={{ fontSize: "12px", color: "#5c5f62" }}>Source: {rule.source}</div>
                 </div>
-                <div>
-                  <div style={{ fontSize: "12px", color: "#5c5f62", marginBottom: "4px" }}>
-                    Value
-                  </div>
-                  <div style={{ fontWeight: 700 }}>{rule.points}</div>
-                </div>
-                <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px", flexWrap: "wrap" }}>
-                  <s-button onClick={() => toggleRule(rule.id)}>
-                    {rule.enabled ? "Disable" : "Enable"}
-                  </s-button>
-                  <s-button variant="primary">Edit rule</s-button>
-                </div>
+              ))}
+              <div>
+                <s-button variant="primary" type="submit" disabled={submitting}>
+                  {submitting ? "Saving…" : "Save earning rules"}
+                </s-button>
               </div>
-            ))}
-          </s-stack>
+            </s-stack>
+          </fetcher.Form>
         </s-section>
       )}
 
+      {/* ── Rewards ──────────────────────────────────────────────────────── */}
       {activeTab === "rewards" && (
         <>
           <s-section heading="Reward catalog">
-            <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", flexWrap: "wrap" }}>
-              <div style={{ fontSize: "13px", color: "#5c5f62", maxWidth: "720px" }}>
-                Rewards must stay aligned to the current program during migration. Use
-                this screen to manage costs, tier eligibility, and active storefront
-                availability.
-              </div>
-              <s-button variant="primary">Add reward</s-button>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div style={styles.muted}>Manage redeemable rewards available to loyalty members.</div>
+              {rewardMode === "none" && <s-button variant="primary" onClick={openAddReward}>Add reward</s-button>}
             </div>
           </s-section>
 
-          <s-section heading="Active rewards">
-            <s-stack direction="block" gap="base">
-              {rewards.map((reward) => (
-                <div
-                  key={reward.id}
-                  style={{
-                    border: "1px solid #e1e3e5",
-                    borderRadius: "12px",
-                    padding: "16px",
-                    background: "#fff",
-                    opacity: reward.active ? 1 : 0.65,
-                  }}
-                >
-                  <div
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "flex-start",
-                      gap: "12px",
-                      marginBottom: "10px",
-                    }}
-                  >
-                    <div>
-                      <div style={{ fontWeight: 600, marginBottom: "4px" }}>{reward.name}</div>
-                      <div style={{ fontSize: "13px", color: "#5c5f62" }}>
-                        {reward.type} - Minimum tier: {reward.tier} - Inventory: {reward.inventory}
+          {/* Add / Edit form */}
+          {rewardMode !== "none" && (
+            <s-section heading={rewardMode === "add" ? "New reward" : "Edit reward"}>
+              <fetcher.Form method="post">
+                <input type="hidden" name="intent" value={rewardMode === "add" ? "create-reward" : "update-reward"} />
+                {rewardMode !== "add" && <input type="hidden" name="id" value={rewardMode} />}
+                <s-stack direction="block" gap="base">
+                  <div style={styles.grid("repeat(2, minmax(0,1fr))")}>
+                    <s-text-field label="Name" name="name" value={rewardForm.name}
+                      onInput={(e: any) => setRewardForm((f) => ({ ...f, name: e.target.value }))} />
+                    <s-text-field label="Points cost" name="pointsCost" value={rewardForm.pointsCost}
+                      onInput={(e: any) => setRewardForm((f) => ({ ...f, pointsCost: e.target.value }))} />
+                  </div>
+                  <div style={styles.grid("repeat(2, minmax(0,1fr))")}>
+                    <s-select label="Type" name="type" value={rewardForm.type}
+                      onChange={(e: any) => setRewardForm((f) => ({ ...f, type: e.target.value }))}>
+                      {REWARD_TYPES.map((t) => <s-option key={t.value} value={t.value}>{t.label}</s-option>)}
+                    </s-select>
+                    <s-text-field label="Value (e.g. 10 for 10%)" name="value" value={rewardForm.value}
+                      onInput={(e: any) => setRewardForm((f) => ({ ...f, value: e.target.value }))} />
+                  </div>
+                  <s-text-field label="Description (optional)" name="description" value={rewardForm.description}
+                    onInput={(e: any) => setRewardForm((f) => ({ ...f, description: e.target.value }))} />
+                  <div style={{ display: "flex", gap: "8px" }}>
+                    <s-button variant="primary" type="submit" disabled={submitting}>
+                      {submitting ? "Saving…" : "Save reward"}
+                    </s-button>
+                    <s-button type="button" onClick={() => setRewardMode("none")}>Cancel</s-button>
+                  </div>
+                </s-stack>
+              </fetcher.Form>
+            </s-section>
+          )}
+
+          <s-section heading={`Rewards (${rewards.length})`}>
+            {rewards.length === 0 ? (
+              <div style={{ ...styles.muted, padding: "24px", textAlign: "center" }}>No rewards yet.</div>
+            ) : (
+              <s-stack direction="block" gap="base">
+                {rewards.map((reward) => (
+                  <div key={reward.id} style={{ ...styles.card, opacity: reward.isActive ? 1 : 0.6 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "10px" }}>
+                      <div>
+                        <div style={{ fontWeight: 600, marginBottom: "4px" }}>{reward.name}</div>
+                        <div style={styles.muted}>
+                          {REWARD_TYPES.find((t) => t.value === reward.type)?.label ?? reward.type}
+                          {" — value: "}{reward.value}
+                          {reward.description ? ` — ${reward.description}` : ""}
+                        </div>
+                      </div>
+                      <span style={styles.pill(reward.isActive)}>{reward.isActive ? "Active" : "Inactive"}</span>
+                    </div>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <div style={{ fontSize: "22px", fontWeight: 700 }}>{reward.pointsCost.toLocaleString()} pts</div>
+                      <div style={{ display: "flex", gap: "8px" }}>
+                        <s-button onClick={() => submitToggleReward(reward.id, reward.isActive)} disabled={submitting}>
+                          {reward.isActive ? "Disable" : "Enable"}
+                        </s-button>
+                        <s-button onClick={() => openEditReward(reward)}>Edit</s-button>
+                        <s-button onClick={() => { if (confirm("Delete this reward?")) submitDeleteReward(reward.id); }} disabled={submitting}>
+                          Delete
+                        </s-button>
                       </div>
                     </div>
-                    <span
-                      style={{
-                        background: reward.active ? "#dff7e5" : "#eceeef",
-                        color: reward.active ? "#0a7d45" : "#5c5f62",
-                        borderRadius: "999px",
-                        padding: "4px 10px",
-                        fontSize: "12px",
-                        fontWeight: 600,
-                      }}
-                    >
-                      {reward.active ? "Active" : "Inactive"}
-                    </span>
                   </div>
-                  <div
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      gap: "12px",
-                      flexWrap: "wrap",
-                      alignItems: "center",
-                    }}
-                  >
-                    <div style={{ fontSize: "22px", fontWeight: 700 }}>
-                      {reward.cost.toLocaleString()} points
-                    </div>
-                    <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-                      <s-button onClick={() => toggleReward(reward.id)}>
-                        {reward.active ? "Disable" : "Enable"}
-                      </s-button>
-                      <s-button variant="primary">Edit reward</s-button>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </s-stack>
+                ))}
+              </s-stack>
+            )}
           </s-section>
         </>
       )}
 
+      {/* ── Tiers ────────────────────────────────────────────────────────── */}
       {activeTab === "tiers" && (
         <s-section heading="Tier configuration">
+          <div style={{ ...styles.muted, marginBottom: "16px" }}>
+            Placeholder values — update with confirmed Ends with Benefits thresholds from Eric before launch.
+          </div>
           <s-stack direction="block" gap="base">
-            {tierCards.map((tier) => (
-              <div
-                key={tier.name}
-                style={{
-                  borderRadius: "14px",
-                  border: `1px solid ${tier.color}33`,
-                  background: tier.background,
-                  padding: "18px",
-                }}
-              >
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "flex-start",
-                    gap: "16px",
-                    marginBottom: "12px",
-                  }}
-                >
-                  <div>
-                    <div style={{ fontSize: "20px", fontWeight: 700, color: tier.color }}>
-                      {tier.name}
+            {shopConfig.tiers.map((tier) => {
+              const { color, bg, border } = tc(tier.name);
+              const isEditing = editingTier === tier.name;
+              const f = tierForms[tier.name];
+              return (
+                <div key={tier.name} style={{ borderRadius: "14px", border: `1px solid ${border}`, background: bg, padding: "18px" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "12px" }}>
+                    <div>
+                      <div style={{ fontSize: "20px", fontWeight: 700, color }}>{tier.displayName}</div>
+                      <div style={styles.muted}>
+                        {tier.minPoints.toLocaleString()}+ pts · {tier.earnMultiplier}x multiplier · {(tierCounts[tier.name] ?? 0).toLocaleString()} members
+                      </div>
                     </div>
-                    <div style={{ fontSize: "13px", color: "#5c5f62" }}>
-                      Threshold: {tier.threshold}
-                    </div>
+                    {!isEditing && <s-button onClick={() => openEditTier(tier)}>Edit tier</s-button>}
                   </div>
-                  <s-button>Edit tier</s-button>
+
+                  {isEditing && f && (
+                    <div style={{ marginTop: "12px", padding: "14px", background: "rgba(255,255,255,0.7)", borderRadius: "10px" }}>
+                      <div style={styles.grid("repeat(3, minmax(0,1fr))")}>
+                        <s-text-field label="Display name" value={f.displayName}
+                          onInput={(e: any) => setTierForms((prev) => ({ ...prev, [tier.name]: { ...prev[tier.name], displayName: e.target.value } }))} />
+                        <s-text-field label="Min points threshold" value={f.minPoints}
+                          onInput={(e: any) => setTierForms((prev) => ({ ...prev, [tier.name]: { ...prev[tier.name], minPoints: e.target.value } }))} />
+                        <s-text-field label="Earn multiplier" value={f.earnMultiplier}
+                          onInput={(e: any) => setTierForms((prev) => ({ ...prev, [tier.name]: { ...prev[tier.name], earnMultiplier: e.target.value } }))} />
+                      </div>
+                      <div style={{ display: "flex", gap: "8px", marginTop: "12px" }}>
+                        <s-button variant="primary" onClick={() => saveTier(tier.name)} disabled={submitting}>
+                          {submitting ? "Saving…" : "Save tier"}
+                        </s-button>
+                        <s-button onClick={() => setEditingTier(null)}>Cancel</s-button>
+                      </div>
+                    </div>
+                  )}
                 </div>
-                <div
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
-                    gap: "12px",
-                  }}
-                >
-                  <div>
-                    <div style={{ fontSize: "12px", color: "#5c5f62" }}>Multiplier</div>
-                    <div style={{ fontWeight: 700, fontSize: "18px" }}>{tier.multiplier}</div>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: "12px", color: "#5c5f62" }}>Members</div>
-                    <div style={{ fontWeight: 700, fontSize: "18px" }}>
-                      {tier.members.toLocaleString()}
-                    </div>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: "12px", color: "#5c5f62" }}>30d spend</div>
-                    <div style={{ fontWeight: 700, fontSize: "18px" }}>{tier.spend}</div>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: "12px", color: "#5c5f62" }}>Migration parity</div>
-                    <div style={{ fontWeight: 700, fontSize: "18px" }}>Awaiting final export</div>
-                  </div>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </s-stack>
         </s-section>
       )}
 
+      {/* ── Referrals (static — not yet implemented) ─────────────────────── */}
       {activeTab === "referrals" && (
-        <>
-          <s-section heading="Referral rules">
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "12px" }}>
-              <s-text-field
-                label="Referrer reward"
-                value={referrerReward}
-                onInput={(event: any) => setReferrerReward(event.target.value)}
-              />
-              <s-text-field
-                label="New customer reward"
-                value={refereeReward}
-                onInput={(event: any) => setRefereeReward(event.target.value)}
-              />
-            </div>
-          </s-section>
-
-          <s-section heading="Top referral members">
-            <div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px" }}>
-                <thead>
-                  <tr style={{ borderBottom: "1px solid #d2d5d8" }}>
-                    {["Customer", "Links sent", "Conversions", "Points earned"].map((header) => (
-                      <th
-                        key={header}
-                        style={{
-                          textAlign: "left",
-                          padding: "10px 12px",
-                          color: "#5c5f62",
-                          fontSize: "12px",
-                          textTransform: "uppercase",
-                        }}
-                      >
-                        {header}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {referrals.map((row) => (
-                    <tr key={row.customer} style={{ borderBottom: "1px solid #eceeef" }}>
-                      <td style={{ padding: "12px", fontWeight: 600 }}>{row.customer}</td>
-                      <td style={{ padding: "12px" }}>{row.sent}</td>
-                      <td style={{ padding: "12px" }}>{row.converted}</td>
-                      <td style={{ padding: "12px" }}>{row.points}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </s-section>
-        </>
+        <s-section heading="Referrals">
+          <s-banner heading="Coming soon" tone="info">
+            Referral tracking is not yet implemented. Configure referral rewards here once the feature is built.
+          </s-banner>
+        </s-section>
       )}
 
+      {/* ── Settings ─────────────────────────────────────────────────────── */}
       {activeTab === "settings" && (
         <>
           <s-section heading="Program settings">
-            <s-stack direction="block" gap="base">
-              <s-text-field
-                label="Points currency name"
-                value={pointsName}
-                onInput={(event: any) => setPointsName(event.target.value)}
-                details="Use the same currency label already shown in the live program."
-              />
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "12px" }}>
+            <fetcher.Form method="post">
+              <input type="hidden" name="intent" value="save-settings" />
+              <input type="hidden" name="launcherPromptsEnabled" value={String(settingsForm.launcherPromptsEnabled)} />
+              <s-stack direction="block" gap="base">
                 <s-text-field
-                  label="Points expiry window (months)"
-                  value={expiryMonths}
-                  onInput={(event: any) => setExpiryMonths(event.target.value)}
+                  label="Points currency name"
+                  name="pointsCurrencyName"
+                  value={settingsForm.pointsCurrencyName}
+                  onInput={(e: any) => setSettingsForm((f) => ({ ...f, pointsCurrencyName: e.target.value }))}
+                  details="Use the same label already shown in the live program."
                 />
-                <s-text-field
-                  label="Expiry warning lead time (days)"
-                  value={warningDays}
-                  onInput={(event: any) => setWarningDays(event.target.value)}
-                />
-              </div>
-            </s-stack>
-          </s-section>
-
-          <s-section heading="Accounts layer">
-            <s-stack direction="block" gap="base">
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  gap: "16px",
-                  padding: "12px 0",
-                }}
-              >
-                <div>
-                  <div style={{ fontWeight: 600 }}>Enable proactive launcher prompts</div>
-                  <div style={{ fontSize: "13px", color: "#5c5f62" }}>
-                    Surface redeemable point nudges once per session for authenticated customers.
-                  </div>
+                <div style={styles.grid("repeat(2, minmax(0,1fr))")}>
+                  <s-text-field
+                    label="Points expiry window (months)"
+                    name="expiryMonths"
+                    value={settingsForm.expiryMonths}
+                    onInput={(e: any) => setSettingsForm((f) => ({ ...f, expiryMonths: e.target.value }))}
+                  />
+                  <s-text-field
+                    label="Expiry warning lead time (days)"
+                    name="expiryWarningDays"
+                    value={settingsForm.expiryWarningDays}
+                    onInput={(e: any) => setSettingsForm((f) => ({ ...f, expiryWarningDays: e.target.value }))}
+                  />
                 </div>
-                <input
-                  type="checkbox"
-                  checked={launcherPrompt}
-                  onChange={(event) => setLauncherPrompt(event.target.checked)}
-                  style={{ width: "18px", height: "18px" }}
-                />
-              </div>
-              <s-text-field
-                label="Silent re-auth session length (days)"
-                value={silentReauthDays}
-                onInput={(event: any) => setSilentReauthDays(event.target.value)}
-                details="Recommended default is 30 days, with OTC fallback on unrecognized IP."
-              />
-            </s-stack>
-          </s-section>
+              </s-stack>
 
-          <s-section>
-            <s-button variant="primary">Save loyalty settings</s-button>
+              <div style={{ marginTop: "20px", paddingTop: "16px", borderTop: "1px solid #e1e3e5" }}>
+                <div style={{ fontWeight: 600, marginBottom: "12px" }}>Accounts layer</div>
+                <s-stack direction="block" gap="base">
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "16px", padding: "12px 0" }}>
+                    <div>
+                      <div style={{ fontWeight: 600 }}>Enable proactive launcher prompts</div>
+                      <div style={styles.muted}>Surface redeemable point nudges once per session.</div>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={settingsForm.launcherPromptsEnabled}
+                      onChange={(e) => setSettingsForm((f) => ({ ...f, launcherPromptsEnabled: e.target.checked }))}
+                      style={{ width: "18px", height: "18px" }}
+                    />
+                  </div>
+                  <s-text-field
+                    label="Silent re-auth session length (days)"
+                    name="silentReauthDays"
+                    value={settingsForm.silentReauthDays}
+                    onInput={(e: any) => setSettingsForm((f) => ({ ...f, silentReauthDays: e.target.value }))}
+                    details="Recommended 30 days, with OTC fallback on unrecognized IP."
+                  />
+                </s-stack>
+              </div>
+
+              <div style={{ marginTop: "16px" }}>
+                <s-button variant="primary" type="submit" disabled={submitting}>
+                  {submitting ? "Saving…" : "Save settings"}
+                </s-button>
+              </div>
+            </fetcher.Form>
           </s-section>
         </>
       )}

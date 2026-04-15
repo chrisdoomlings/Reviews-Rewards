@@ -190,6 +190,15 @@ model EmailJob {
   @@index([customerId])
 }
 
+// ─── Per-shop configuration (tier thresholds, earn rates, program settings) ──
+
+model ShopConfig {
+  id        String   @id @default(cuid())
+  shop      String   @unique
+  config    Json
+  updatedAt DateTime @updatedAt
+}
+
 // ─── Login sessions — Multipass OTC (NEW) ────────────────────────────────────
 
 model LoginSession {

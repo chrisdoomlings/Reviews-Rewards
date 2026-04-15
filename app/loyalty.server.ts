@@ -1,45 +1,104 @@
 /**
- * Loyalty points engine — core business logic.
+ * Loyalty points engine — core business logic and admin queries.
  *
- * TIER CONFIG: placeholder values below. Update with real "Ends with Benefits"
- * thresholds, earning rates, and tier names from Eric before launch (Milestone 1 blocker).
+ * TIER CONFIG: placeholder values are used until Eric provides the confirmed
+ * "Ends with Benefits" tier names, thresholds, and earn rates (Milestone 1 blocker).
+ * Once provided, update them via the Tiers tab in the admin dashboard.
  */
 
 import prisma from "./db.server";
 
-// ─── Tier configuration ───────────────────────────────────────────────────────
-// TODO: Replace with confirmed "Ends with Benefits" values from Eric.
+// ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface TierConfig {
-  name: string;
-  minPoints: number;      // lifetime points threshold to reach this tier
-  earnMultiplier: number; // multiplier applied to base earn rate
+  name: string;          // internal key e.g. "bronze"
+  displayName: string;   // shown in UI e.g. "Bronze"
+  minPoints: number;
+  earnMultiplier: number;
 }
 
-export const TIERS: TierConfig[] = [
-  { name: "bronze", minPoints: 0,    earnMultiplier: 1.0 },
-  { name: "silver", minPoints: 500,  earnMultiplier: 1.5 },
-  { name: "gold",   minPoints: 1500, earnMultiplier: 2.0 },
-];
+export interface EarningRulesConfig {
+  basePointsPerDollar: number;
+  purchaseEnabled: boolean;
+  textReviewEnabled: boolean;
+  textReviewPoints: number;
+  videoReviewEnabled: boolean;
+  videoReviewPoints: number;
+}
 
-// Base earn rate: points per dollar spent. TODO: confirm with Eric.
-const BASE_POINTS_PER_DOLLAR = 1;
+export interface ShopConfigData {
+  pointsCurrencyName: string;
+  expiryMonths: number;
+  expiryWarningDays: number;
+  launcherPromptsEnabled: boolean;
+  silentReauthDays: number;
+  tiers: TierConfig[];
+  earningRules: EarningRulesConfig;
+}
 
-// Points expiry window in months.
-const EXPIRY_MONTHS = 12;
+// ─── Defaults ─────────────────────────────────────────────────────────────────
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+// TODO: Replace tier values with confirmed "Ends with Benefits" data from Eric.
+const DEFAULT_SHOP_CONFIG: ShopConfigData = {
+  pointsCurrencyName: "Doom Points",
+  expiryMonths: 12,
+  expiryWarningDays: 30,
+  launcherPromptsEnabled: true,
+  silentReauthDays: 30,
+  tiers: [
+    { name: "bronze", displayName: "Bronze", minPoints: 0,    earnMultiplier: 1.0 },
+    { name: "silver", displayName: "Silver", minPoints: 500,  earnMultiplier: 1.5 },
+    { name: "gold",   displayName: "Gold",   minPoints: 1500, earnMultiplier: 2.0 },
+  ],
+  earningRules: {
+    basePointsPerDollar: 1,
+    purchaseEnabled: true,
+    textReviewEnabled: true,
+    textReviewPoints: 75,
+    videoReviewEnabled: true,
+    videoReviewPoints: 50,
+  },
+};
 
-export function getTierForPoints(lifetimePoints: number): TierConfig {
-  for (let i = TIERS.length - 1; i >= 0; i--) {
-    if (lifetimePoints >= TIERS[i].minPoints) return TIERS[i];
+// ─── Shop config ──────────────────────────────────────────────────────────────
+
+export async function getShopConfig(shop: string): Promise<ShopConfigData> {
+  const record = await prisma.shopConfig.findUnique({ where: { shop } });
+  if (!record) return DEFAULT_SHOP_CONFIG;
+  const stored = record.config as Partial<ShopConfigData>;
+  return {
+    ...DEFAULT_SHOP_CONFIG,
+    ...stored,
+    tiers: stored.tiers ?? DEFAULT_SHOP_CONFIG.tiers,
+    earningRules: stored.earningRules
+      ? { ...DEFAULT_SHOP_CONFIG.earningRules, ...stored.earningRules }
+      : DEFAULT_SHOP_CONFIG.earningRules,
+  };
+}
+
+export async function saveShopConfig(shop: string, patch: Partial<ShopConfigData>): Promise<void> {
+  const current = await getShopConfig(shop);
+  // JSON round-trip strips typed interfaces so Prisma accepts the value as Json.
+  const merged = JSON.parse(JSON.stringify({ ...current, ...patch }));
+  await prisma.shopConfig.upsert({
+    where: { shop },
+    create: { shop, config: merged },
+    update: { config: merged },
+  });
+}
+
+// ─── Tier helpers ─────────────────────────────────────────────────────────────
+
+export function getTierForPoints(points: number, tiers: TierConfig[]): TierConfig {
+  for (let i = tiers.length - 1; i >= 0; i--) {
+    if (points >= tiers[i].minPoints) return tiers[i];
   }
-  return TIERS[0];
+  return tiers[0];
 }
 
-export function getNextTier(currentTierName: string): TierConfig | null {
-  const idx = TIERS.findIndex((t) => t.name === currentTierName);
-  return idx < TIERS.length - 1 ? TIERS[idx + 1] : null;
+export function getNextTier(currentTierName: string, tiers: TierConfig[]): TierConfig | null {
+  const idx = tiers.findIndex((t) => t.name === currentTierName);
+  return idx >= 0 && idx < tiers.length - 1 ? tiers[idx + 1] : null;
 }
 
 function addMonths(date: Date, months: number): Date {
@@ -52,12 +111,12 @@ function addMonths(date: Date, months: number): Date {
 
 export interface AwardPointsInput {
   shop: string;
-  shopifyOrderId: string;  // numeric Shopify order ID as string
+  shopifyOrderId: string;
   shopifyCustomerId: string;
   email: string;
   firstName?: string;
   lastName?: string;
-  orderTotalUsd: number;   // parsed from order total_price
+  orderTotalUsd: number;
 }
 
 export interface AwardPointsResult {
@@ -67,9 +126,7 @@ export interface AwardPointsResult {
   alreadyProcessed: boolean;
 }
 
-export async function awardPointsForOrder(
-  input: AwardPointsInput,
-): Promise<AwardPointsResult> {
+export async function awardPointsForOrder(input: AwardPointsInput): Promise<AwardPointsResult> {
   const { shop, shopifyOrderId, shopifyCustomerId, email, firstName, lastName, orderTotalUsd } = input;
 
   // Idempotency: skip if this order was already processed.
@@ -77,18 +134,17 @@ export async function awardPointsForOrder(
     where: { orderId: shopifyOrderId },
   });
   if (existing) {
-    const customer = await prisma.customer.findUnique({
-      where: { shopifyCustomerId },
-    });
+    const customer = await prisma.customer.findUnique({ where: { shopifyCustomerId } });
     return {
       pointsAwarded: 0,
       newBalance: customer?.pointsBalance ?? 0,
-      tier: customer?.tier ?? TIERS[0].name,
+      tier: customer?.tier ?? "bronze",
       alreadyProcessed: true,
     };
   }
 
-  // Upsert customer — they may not have logged in yet.
+  const config = await getShopConfig(shop);
+
   const customer = await prisma.customer.upsert({
     where: { shopifyCustomerId },
     create: {
@@ -98,7 +154,7 @@ export async function awardPointsForOrder(
       firstName: firstName ?? null,
       lastName: lastName ?? null,
       pointsBalance: 0,
-      tier: TIERS[0].name,
+      tier: config.tiers[0].name,
     },
     update: {
       email,
@@ -107,16 +163,15 @@ export async function awardPointsForOrder(
     },
   });
 
-  const currentTier = getTierForPoints(customer.pointsBalance);
+  const currentTier = getTierForPoints(customer.pointsBalance, config.tiers);
   const pointsToAward = Math.floor(
-    orderTotalUsd * BASE_POINTS_PER_DOLLAR * currentTier.earnMultiplier,
+    orderTotalUsd * config.earningRules.basePointsPerDollar * currentTier.earnMultiplier,
   );
 
   const newBalance = customer.pointsBalance + pointsToAward;
-  const newTier = getTierForPoints(newBalance);
-  const newExpiry = addMonths(new Date(), EXPIRY_MONTHS);
+  const newTier = getTierForPoints(newBalance, config.tiers);
+  const newExpiry = addMonths(new Date(), config.expiryMonths);
 
-  // Write transaction + update customer in one transaction.
   await prisma.$transaction([
     prisma.transaction.create({
       data: {
@@ -145,7 +200,7 @@ export async function awardPointsForOrder(
   };
 }
 
-// ─── Get customer loyalty state ───────────────────────────────────────────────
+// ─── Customer loyalty state (storefront API) ──────────────────────────────────
 
 export interface CustomerLoyaltyState {
   found: boolean;
@@ -155,7 +210,7 @@ export interface CustomerLoyaltyState {
   tierMultiplier: number;
   nextTier: string | null;
   pointsToNextTier: number | null;
-  pointsExpiresAt: string | null;  // ISO string
+  pointsExpiresAt: string | null;
   recentTransactions: {
     type: string;
     points: number;
@@ -164,9 +219,7 @@ export interface CustomerLoyaltyState {
   }[];
 }
 
-export async function getCustomerLoyalty(
-  shopifyCustomerId: string,
-): Promise<CustomerLoyaltyState> {
+export async function getCustomerLoyalty(shopifyCustomerId: string): Promise<CustomerLoyaltyState> {
   const customer = await prisma.customer.findUnique({
     where: { shopifyCustomerId },
     include: {
@@ -182,17 +235,18 @@ export async function getCustomerLoyalty(
       found: false,
       customerId: null,
       pointsBalance: 0,
-      tier: TIERS[0].name,
-      tierMultiplier: TIERS[0].earnMultiplier,
-      nextTier: TIERS[1]?.name ?? null,
-      pointsToNextTier: TIERS[1]?.minPoints ?? null,
+      tier: DEFAULT_SHOP_CONFIG.tiers[0].name,
+      tierMultiplier: DEFAULT_SHOP_CONFIG.tiers[0].earnMultiplier,
+      nextTier: DEFAULT_SHOP_CONFIG.tiers[1]?.name ?? null,
+      pointsToNextTier: DEFAULT_SHOP_CONFIG.tiers[1]?.minPoints ?? null,
       pointsExpiresAt: null,
       recentTransactions: [],
     };
   }
 
-  const currentTierConfig = getTierForPoints(customer.pointsBalance);
-  const next = getNextTier(currentTierConfig.name);
+  const config = await getShopConfig(customer.shop);
+  const currentTierConfig = getTierForPoints(customer.pointsBalance, config.tiers);
+  const next = getNextTier(currentTierConfig.name, config.tiers);
 
   return {
     found: true,
@@ -212,11 +266,10 @@ export async function getCustomerLoyalty(
   };
 }
 
-// ─── Expire stale points (called by a scheduled job) ─────────────────────────
+// ─── Expire stale points (scheduled job) ─────────────────────────────────────
 
 export async function expireStalePoints(shop: string): Promise<number> {
   const now = new Date();
-
   const stale = await prisma.customer.findMany({
     where: {
       shop,
@@ -247,4 +300,149 @@ export async function expireStalePoints(shop: string): Promise<number> {
   }
 
   return expired;
+}
+
+// ─── Admin: overview stats ────────────────────────────────────────────────────
+
+export async function getOverviewStats(shop: string) {
+  const soon = new Date();
+  soon.setDate(soon.getDate() + 30);
+
+  const [totalMembers, pointsAgg, activeRewardsCount, expiringCount] = await Promise.all([
+    prisma.customer.count({ where: { shop } }),
+    prisma.transaction.aggregate({
+      where: { customer: { shop }, type: "earn" },
+      _sum: { points: true },
+    }),
+    prisma.reward.count({ where: { shop, isActive: true } }),
+    prisma.customer.count({
+      where: {
+        shop,
+        pointsBalance: { gt: 0 },
+        pointsExpiresAt: { not: null, lt: soon },
+      },
+    }),
+  ]);
+
+  return {
+    totalMembers,
+    totalPointsIssued: pointsAgg._sum.points ?? 0,
+    activeRewardsCount,
+    expiringIn30Days: expiringCount,
+  };
+}
+
+// ─── Admin: tier member counts ────────────────────────────────────────────────
+
+export async function getTierCounts(shop: string): Promise<Record<string, number>> {
+  const rows = await prisma.customer.groupBy({
+    by: ["tier"],
+    where: { shop },
+    _count: { id: true },
+  });
+  return Object.fromEntries(rows.map((r) => [r.tier, r._count.id]));
+}
+
+// ─── Admin: member list ───────────────────────────────────────────────────────
+
+const MEMBERS_PAGE_SIZE = 25;
+
+export async function getMembers(
+  shop: string,
+  { search = "", page = 1 }: { search?: string; page?: number },
+) {
+  const where = {
+    shop,
+    ...(search
+      ? {
+          OR: [
+            { email: { contains: search, mode: "insensitive" as const } },
+            { firstName: { contains: search, mode: "insensitive" as const } },
+            { lastName: { contains: search, mode: "insensitive" as const } },
+          ],
+        }
+      : {}),
+  };
+
+  const soon = new Date();
+  soon.setDate(soon.getDate() + 30);
+
+  const [customers, total] = await Promise.all([
+    prisma.customer.findMany({
+      where,
+      orderBy: { pointsBalance: "desc" },
+      skip: (page - 1) * MEMBERS_PAGE_SIZE,
+      take: MEMBERS_PAGE_SIZE,
+      include: {
+        _count: { select: { reviews: true } },
+        transactions: {
+          orderBy: { createdAt: "desc" },
+          take: 1,
+          select: { createdAt: true },
+        },
+      },
+    }),
+    prisma.customer.count({ where }),
+  ]);
+
+  return {
+    members: customers.map((c) => ({
+      id: c.id,
+      shopifyCustomerId: c.shopifyCustomerId,
+      email: c.email,
+      firstName: c.firstName,
+      lastName: c.lastName,
+      tier: c.tier,
+      pointsBalance: c.pointsBalance,
+      expiringSoon:
+        c.pointsBalance > 0 &&
+        c.pointsExpiresAt != null &&
+        c.pointsExpiresAt < soon,
+      reviewCount: c._count.reviews,
+      lastActivityAt: c.transactions[0]?.createdAt.toISOString() ?? null,
+    })),
+    memberTotal: total,
+    memberPage: page,
+    memberPageSize: MEMBERS_PAGE_SIZE,
+  };
+}
+
+// ─── Admin: rewards ───────────────────────────────────────────────────────────
+
+export async function getRewards(shop: string) {
+  const rows = await prisma.reward.findMany({
+    where: { shop },
+    orderBy: { createdAt: "asc" },
+  });
+  return rows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    description: r.description,
+    type: r.type,
+    value: r.value,
+    pointsCost: r.pointsCost,
+    isActive: r.isActive,
+  }));
+}
+
+export async function createReward(
+  shop: string,
+  data: { name: string; description: string; type: string; value: string; pointsCost: number },
+) {
+  return prisma.reward.create({ data: { shop, ...data } });
+}
+
+export async function updateReward(
+  id: string,
+  data: { name: string; description: string; type: string; value: string; pointsCost: number },
+) {
+  return prisma.reward.update({ where: { id }, data });
+}
+
+export async function toggleRewardActive(id: string, isActive: boolean) {
+  return prisma.reward.update({ where: { id }, data: { isActive } });
+}
+
+export async function deleteReward(id: string) {
+  return prisma.reward.delete({ where: { id } });
 }
