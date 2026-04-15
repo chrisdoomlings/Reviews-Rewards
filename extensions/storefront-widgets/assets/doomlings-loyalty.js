@@ -14,7 +14,7 @@
   // ─── CSS ───────────────────────────────────────────────────────────────────
 
   var CSS = [
-    '.dl-loyalty{font-family:inherit;--dl-accent:#c41b1b;color:inherit}',
+    '.dl-loyalty{font-family:inherit;--dl-accent:#c41b1b;color:inherit;padding-inline:var(--page-padding,1.6rem)}',
     '.dl-loyalty *{box-sizing:border-box}',
 
     /* Balance hero */

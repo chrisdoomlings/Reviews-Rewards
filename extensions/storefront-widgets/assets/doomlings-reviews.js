@@ -18,7 +18,7 @@
   // ─── CSS ───────────────────────────────────────────────────────────────────
 
   var CSS = [
-    '.dl-reviews{font-family:inherit;--dl-accent:#c41b1b;color:inherit}',
+    '.dl-reviews{font-family:inherit;--dl-accent:#c41b1b;color:inherit;padding-inline:var(--page-padding,1.6rem)}',
     '.dl-reviews *{box-sizing:border-box}',
 
     /* Summary */
@@ -28,7 +28,7 @@
     '.dl-reviews__stars-row{display:flex;align-items:center;gap:6px}',
     '.dl-reviews__stars{color:#f59e0b;font-size:18px;letter-spacing:1px}',
     '.dl-reviews__count{font-size:13px;color:#6b7280}',
-    '.dl-reviews__dist{flex:1;min-width:160px;display:flex;flex-direction:column;gap:4px}',
+    '.dl-reviews__dist{flex:1;min-width:160px;max-width:360px;display:flex;flex-direction:column;gap:4px}',
     '.dl-reviews__dist-row{display:flex;align-items:center;gap:8px;font-size:12px;color:#6b7280}',
     '.dl-reviews__dist-track{flex:1;height:6px;background:#e5e7eb;border-radius:99px;overflow:hidden}',
     '.dl-reviews__dist-fill{height:100%;background:var(--dl-accent);border-radius:99px;transition:width .3s}',
