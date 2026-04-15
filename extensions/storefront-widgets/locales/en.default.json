@@ -1,0 +1,20 @@
+{
+  "product_reviews": {
+    "heading": "Customer Reviews",
+    "no_reviews": "No reviews yet. Be the first to review this product.",
+    "write_review": "Write a Review",
+    "verified": "Verified Purchase",
+    "admin_reply_label": "Response from Doomlings"
+  },
+  "loyalty_account": {
+    "heading": "Your Rewards",
+    "points_balance": "Points Balance",
+    "current_tier": "Current Tier",
+    "points_to_next": "points to {next_tier}",
+    "expiry_warning": "Your points expire on {date}",
+    "recent_activity": "Recent Activity",
+    "available_rewards": "Available Rewards",
+    "not_logged_in": "Log in to view your loyalty rewards",
+    "no_rewards": "No rewards available yet"
+  }
+}

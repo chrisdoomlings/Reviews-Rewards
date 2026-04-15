@@ -1,0 +1,53 @@
+{{ 'doomlings-reviews.js' | asset_url | script_tag }}
+
+<div
+  id="doomlings-reviews-{{ block.id }}"
+  data-doomlings-reviews
+  data-product-id="{{ product.id }}"
+  data-shop="{{ shop.permanent_domain }}"
+  data-customer-id="{{ customer.id | default: '' }}"
+  data-app-url="{{ block.settings.app_url }}"
+  data-reviews-per-page="{{ block.settings.reviews_per_page }}"
+  data-show-form="{{ block.settings.show_form }}"
+  data-accent-color="{{ block.settings.accent_color }}"
+  {{ block.shopify_attributes }}
+>
+  <p style="color:#888;font-size:14px;">Loading reviews&hellip;</p>
+</div>
+
+{% schema %}
+{
+  "name": "Product Reviews",
+  "target": "section",
+  "settings": [
+    {
+      "type": "text",
+      "id": "app_url",
+      "label": "App URL",
+      "default": "https://reviews-rewards.vercel.app",
+      "info": "Do not change unless instructed by your developer."
+    },
+    {
+      "type": "range",
+      "id": "reviews_per_page",
+      "label": "Reviews per page",
+      "min": 3,
+      "max": 20,
+      "step": 1,
+      "default": 10
+    },
+    {
+      "type": "checkbox",
+      "id": "show_form",
+      "label": "Show review submission form",
+      "default": true
+    },
+    {
+      "type": "color",
+      "id": "accent_color",
+      "label": "Accent color",
+      "default": "#c41b1b"
+    }
+  ]
+}
+{% endschema %}

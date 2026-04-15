@@ -1,0 +1,35 @@
+{{ 'doomlings-loyalty.js' | asset_url | script_tag }}
+
+<div
+  id="doomlings-loyalty-{{ block.id }}"
+  data-doomlings-loyalty
+  data-customer-id="{{ customer.id | default: '' }}"
+  data-shop="{{ shop.permanent_domain }}"
+  data-app-url="{{ block.settings.app_url }}"
+  data-accent-color="{{ block.settings.accent_color }}"
+  {{ block.shopify_attributes }}
+>
+  <p style="color:#888;font-size:14px;">Loading your rewards&hellip;</p>
+</div>
+
+{% schema %}
+{
+  "name": "Loyalty Account Widget",
+  "target": "section",
+  "settings": [
+    {
+      "type": "text",
+      "id": "app_url",
+      "label": "App URL",
+      "default": "https://reviews-rewards.vercel.app",
+      "info": "Do not change unless instructed by your developer."
+    },
+    {
+      "type": "color",
+      "id": "accent_color",
+      "label": "Accent color",
+      "default": "#c41b1b"
+    }
+  ]
+}
+{% endschema %}

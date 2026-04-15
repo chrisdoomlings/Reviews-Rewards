@@ -43,7 +43,7 @@ export async function action({ request }: ActionFunctionArgs) {
   } = raw as SubmitReviewBody;
 
   if (!shop || !shopifyProductId || typeof rating !== "number" || rating < 1 || rating > 5) {
-    return Response.json({ error: "Missing or invalid required fields" }, { status: 400 });
+    return corsJson({ error: "Missing or invalid required fields" }, { status: 400 });
   }
 
   // Resolve internal customer record
@@ -111,5 +111,5 @@ export async function action({ request }: ActionFunctionArgs) {
     });
   }
 
-  return Response.json({ reviewId: review.id, status: review.status }, { status: 201 });
+  return corsJson({ reviewId: review.id, status: review.status }, { status: 201 });
 }
