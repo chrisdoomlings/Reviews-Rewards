@@ -1,8 +1,12 @@
-import type { ActionFunctionArgs } from "react-router";
+import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import prisma from "../db.server";
 import { getShopConfig } from "../loyalty.server";
+import { corsJson, corsPreflight, CORS_HEADERS } from "../cors.server";
 
-export const loader = () => new Response("Method Not Allowed", { status: 405 });
+export const loader = ({ request }: LoaderFunctionArgs) => {
+  if (request.method === "OPTIONS") return corsPreflight();
+  return new Response("Method Not Allowed", { status: 405, headers: CORS_HEADERS });
+};
 
 interface SubmitReviewBody {
   shop: string;
@@ -19,11 +23,11 @@ interface SubmitReviewBody {
 
 export async function action({ request }: ActionFunctionArgs) {
   if (request.method !== "POST") {
-    return Response.json({ error: "Method not allowed" }, { status: 405 });
+    return corsJson({ error: "Method not allowed" }, { status: 405 });
   }
 
   const raw = await request.json().catch(() => null);
-  if (!raw) return Response.json({ error: "Invalid request body" }, { status: 400 });
+  if (!raw) return corsJson({ error: "Invalid request body" }, { status: 400 });
 
   const {
     shop,

@@ -10,25 +10,26 @@
 
 import type { LoaderFunctionArgs } from "react-router";
 import { getCustomerLoyalty } from "../loyalty.server";
+import { corsJson, corsPreflight } from "../cors.server";
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
+  if (request.method === "OPTIONS") return corsPreflight();
+
   const { shopifyCustomerId } = params;
 
   if (!shopifyCustomerId) {
-    return Response.json({ error: "Missing customer ID" }, { status: 400 });
+    return corsJson({ error: "Missing customer ID" }, { status: 400 });
   }
 
   // Basic sanitization — customer IDs are numeric strings from Shopify.
   if (!/^\d+$/.test(shopifyCustomerId)) {
-    return Response.json({ error: "Invalid customer ID" }, { status: 400 });
+    return corsJson({ error: "Invalid customer ID" }, { status: 400 });
   }
 
   const loyalty = await getCustomerLoyalty(shopifyCustomerId);
 
-  return Response.json(loyalty, {
-    headers: {
-      // Storefront widget caches for 30 s; CDN may cache up to 60 s.
-      "Cache-Control": "private, max-age=30",
-    },
+  return corsJson(loyalty, {
+    // Storefront widget caches for 30 s; CDN may cache up to 60 s.
+    headers: { "Cache-Control": "private, max-age=30" },
   });
 };
