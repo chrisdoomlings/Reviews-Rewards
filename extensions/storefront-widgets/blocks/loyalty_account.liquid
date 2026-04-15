@@ -1,11 +1,11 @@
-{{ 'doomlings-loyalty.js' | asset_url | script_tag }}
+<script src="{{ 'doomlings-loyalty.js' | asset_url }}" defer></script>
 
 <div
   id="doomlings-loyalty-{{ block.id }}"
   data-doomlings-loyalty
   data-customer-id="{{ customer.id | default: '' }}"
   data-shop="{{ shop.permanent_domain }}"
-  data-app-url="{{ block.settings.app_url }}"
+  data-app-url="https://reviews-rewards.vercel.app"
   data-accent-color="{{ block.settings.accent_color }}"
   {{ block.shopify_attributes }}
 >

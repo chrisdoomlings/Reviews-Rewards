@@ -1,4 +1,4 @@
-{{ 'doomlings-reviews.js' | asset_url | script_tag }}
+<script src="{{ 'doomlings-reviews.js' | asset_url }}" defer></script>
 
 <div
   id="doomlings-reviews-{{ block.id }}"
@@ -6,7 +6,7 @@
   data-product-id="{{ product.id }}"
   data-shop="{{ shop.permanent_domain }}"
   data-customer-id="{{ customer.id | default: '' }}"
-  data-app-url="{{ block.settings.app_url }}"
+  data-app-url="https://reviews-rewards.vercel.app"
   data-reviews-per-page="{{ block.settings.reviews_per_page }}"
   data-show-form="{{ block.settings.show_form }}"
   data-accent-color="{{ block.settings.accent_color }}"
@@ -20,13 +20,6 @@
   "name": "Product Reviews",
   "target": "section",
   "settings": [
-    {
-      "type": "text",
-      "id": "app_url",
-      "label": "App URL",
-      "default": "https://reviews-rewards.vercel.app",
-      "info": "Do not change unless instructed by your developer."
-    },
     {
       "type": "range",
       "id": "reviews_per_page",
