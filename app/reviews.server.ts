@@ -18,6 +18,7 @@ export interface ReviewRow {
   customerId: string | null;
   customerShop: string | null;
   customer: { email: string; firstName: string | null; lastName: string | null } | null;
+  reviewerName: string | null;
   photos: { id: string; url: string }[];
   videos: { id: string; status: string; durationSecs: number | null; url: string | null }[];
 }
@@ -48,6 +49,19 @@ export async function getReviewStats(shop: string) {
   };
 }
 
+// ─── Star rating distribution ────────────────────────────────────────────────
+
+export async function getRatingCounts(shop: string): Promise<Record<number, number>> {
+  const rows = await prisma.review.groupBy({
+    by: ["rating"],
+    where: { shop },
+    _count: true,
+  });
+  const out: Record<number, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+  for (const r of rows) out[r.rating] = r._count;
+  return out;
+}
+
 // ─── Paginated review list ────────────────────────────────────────────────────
 
 const PAGE_SIZE = 25;
@@ -55,10 +69,12 @@ const PAGE_SIZE = 25;
 export async function getReviewsPage(
   shop: string,
   {
-    status = "pending",
+    status = "all",
     page = 1,
     search = "",
-  }: { status?: string; page?: number; search?: string },
+    rating,
+    type,
+  }: { status?: string; page?: number; search?: string; rating?: number; type?: string },
 ) {
   // Build where clause
   const conditions: object[] = [{ shop }];
@@ -69,11 +85,17 @@ export async function getReviewsPage(
     conditions.push({ status });
   }
 
+  if (rating) conditions.push({ rating });
+
+  if (type === "product") conditions.push({ shopifyProductId: { not: "site" } });
+  else if (type === "site") conditions.push({ shopifyProductId: "site" });
+
   if (search) {
     conditions.push({
       OR: [
         { title: { contains: search, mode: "insensitive" } },
         { body: { contains: search, mode: "insensitive" } },
+        { reviewerName: { contains: search, mode: "insensitive" } },
       ],
     });
   }
@@ -119,6 +141,7 @@ export async function getReviewsPage(
       customer: r.customer
         ? { email: r.customer.email, firstName: r.customer.firstName, lastName: r.customer.lastName }
         : null,
+      reviewerName: r.reviewerName,
       photos: r.photos.map((p) => ({ id: p.id, url: p.url })),
       videos: r.videos.map((v) => ({
         id: v.id,
