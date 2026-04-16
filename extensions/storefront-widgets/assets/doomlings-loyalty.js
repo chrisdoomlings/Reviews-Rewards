@@ -111,12 +111,52 @@
     return str ? str.charAt(0).toUpperCase() + str.slice(1) : str;
   }
 
+  // ─── Auth CSS additions ────────────────────────────────────────────────────
+
+  var AUTH_CSS = [
+    '.dl-loyalty__auth{padding:24px;background:#f9fafb;border-radius:12px;margin:8px 0}',
+    '.dl-loyalty__auth-title{font-size:16px;font-weight:700;margin:0 0 6px}',
+    '.dl-loyalty__auth-sub{font-size:13px;color:#6b7280;margin:0 0 20px}',
+    '.dl-loyalty__auth-field{margin-bottom:12px}',
+    '.dl-loyalty__auth-label{display:block;font-size:13px;font-weight:600;margin-bottom:6px;color:#374151}',
+    '.dl-loyalty__auth-input{width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;font-family:inherit;background:#fff;outline:none}',
+    '.dl-loyalty__auth-input:focus{border-color:var(--dl-accent);box-shadow:0 0 0 3px rgba(196,27,27,.12)}',
+    '.dl-loyalty__auth-input--code{font-size:28px;font-weight:800;letter-spacing:12px;text-align:center;max-width:200px}',
+    '.dl-loyalty__auth-btn{width:100%;padding:11px;background:var(--dl-accent);color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer;margin-top:4px}',
+    '.dl-loyalty__auth-btn:hover{opacity:.9}',
+    '.dl-loyalty__auth-btn:disabled{opacity:.5;cursor:not-allowed}',
+    '.dl-loyalty__auth-back{background:none;border:none;color:var(--dl-accent);font-size:13px;cursor:pointer;padding:0;margin-top:12px;text-decoration:underline}',
+    '.dl-loyalty__auth-err{font-size:13px;color:#dc2626;margin-top:8px;padding:8px 12px;background:#fee2e2;border-radius:6px}',
+    '.dl-loyalty__auth-hint{font-size:12px;color:#9ca3af;margin-top:10px}',
+  ].join('');
+
+  // ─── Storage helpers ───────────────────────────────────────────────────────
+
+  var STORAGE_KEY = 'dl_loyalty_session';
+
+  function saveSession(customerId, email, firstName) {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ customerId: customerId, email: email, firstName: firstName || '' }));
+    } catch (e) {}
+  }
+
+  function loadSession() {
+    try {
+      var raw = localStorage.getItem(STORAGE_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) { return null; }
+  }
+
+  function clearSession() {
+    try { localStorage.removeItem(STORAGE_KEY); } catch (e) {}
+  }
+
   // ─── Main widget class ─────────────────────────────────────────────────────
 
   function LoyaltyWidget(el) {
     this.el = el;
     this.cfg = {
-      customerId: el.dataset.customerId || null,
+      customerId: el.dataset.customerId || null,   // from Shopify Liquid (logged-in customers)
       shop:       el.dataset.shop,
       appUrl:     (el.dataset.appUrl || 'https://reviews-rewards.vercel.app').replace(/\/$/, ''),
       accent:     el.dataset.accentColor || '#c41b1b',
@@ -126,15 +166,26 @@
 
   LoyaltyWidget.prototype._init = function () {
     injectCss('doomlings-loyalty-css', CSS);
+    injectCss('doomlings-loyalty-auth-css', AUTH_CSS);
     this.el.classList.add('dl-loyalty');
     this.el.style.setProperty('--dl-accent', this.cfg.accent);
 
-    if (!this.cfg.customerId) {
-      this._renderLoggedOut();
+    // 1. Customer logged into Shopify (customer.id from Liquid) — best case
+    if (this.cfg.customerId) {
+      this._renderLoading();
+      this._fetchAll(this.cfg.customerId);
       return;
     }
-    this._renderLoading();
-    this._fetchAll();
+
+    // 2. Check localStorage for a previously verified session
+    var stored = loadSession();
+    if (stored && stored.customerId) {
+      this._trySilentReauth(stored);
+      return;
+    }
+
+    // 3. No session — show OTC login form
+    this._renderEmailForm();
   };
 
   LoyaltyWidget.prototype._renderLoading = function () {
@@ -147,9 +198,164 @@
       + '</div>';
   };
 
-  LoyaltyWidget.prototype._fetchAll = function () {
+  LoyaltyWidget.prototype._trySilentReauth = function (stored) {
     var self = this;
-    var loyaltyUrl = self.cfg.appUrl + '/api/loyalty/customer/' + encodeURIComponent(self.cfg.customerId)
+    self._renderLoading();
+
+    fetch(self.cfg.appUrl + '/api/auth/silent', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ shop: self.cfg.shop, shopifyCustomerId: stored.customerId }),
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (data.allowed) {
+          self._fetchAll(stored.customerId);
+        } else {
+          clearSession();
+          self._renderEmailForm();
+        }
+      })
+      .catch(function () {
+        self._renderEmailForm();
+      });
+  };
+
+  LoyaltyWidget.prototype._renderEmailForm = function () {
+    var self = this;
+    self.el.innerHTML = '';
+
+    var wrap = document.createElement('div');
+    wrap.className = 'dl-loyalty__auth';
+    wrap.innerHTML = '<h3 class="dl-loyalty__auth-title">Access Your Rewards</h3>'
+      + '<p class="dl-loyalty__auth-sub">Enter your email and we\'ll send you a login code.</p>'
+      + '<div class="dl-loyalty__auth-field">'
+      + '<label class="dl-loyalty__auth-label">Email address</label>'
+      + '<input class="dl-loyalty__auth-input" type="email" placeholder="you@example.com" autocomplete="email">'
+      + '</div>'
+      + '<button class="dl-loyalty__auth-btn">Send Code</button>';
+    self.el.appendChild(wrap);
+
+    var input = wrap.querySelector('input');
+    var btn   = wrap.querySelector('button');
+
+    function submit() {
+      var email = input.value.trim();
+      if (!email) return;
+      var existing = wrap.querySelector('.dl-loyalty__auth-err');
+      if (existing) existing.remove();
+      btn.disabled    = true;
+      btn.textContent = 'Sending\u2026';
+
+      fetch(self.cfg.appUrl + '/api/auth/request-otc', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ shop: self.cfg.shop, email: email }),
+      })
+        .then(function () { self._renderOtcForm(email); })
+        .catch(function () {
+          btn.disabled    = false;
+          btn.textContent = 'Send Code';
+          var err = document.createElement('div');
+          err.className   = 'dl-loyalty__auth-err';
+          err.textContent = 'Could not send code. Please try again.';
+          wrap.appendChild(err);
+        });
+    }
+
+    btn.addEventListener('click', submit);
+    input.addEventListener('keydown', function (e) { if (e.key === 'Enter') submit(); });
+    setTimeout(function () { input.focus(); }, 50);
+  };
+
+  LoyaltyWidget.prototype._renderOtcForm = function (email) {
+    var self = this;
+    self.el.innerHTML = '';
+
+    var wrap = document.createElement('div');
+    wrap.className = 'dl-loyalty__auth';
+    wrap.innerHTML = '<h3 class="dl-loyalty__auth-title">Check Your Email</h3>'
+      + '<p class="dl-loyalty__auth-sub">We sent a 4-digit code to <strong>' + esc(email) + '</strong>.</p>'
+      + '<div class="dl-loyalty__auth-field">'
+      + '<label class="dl-loyalty__auth-label">Login code</label>'
+      + '<input class="dl-loyalty__auth-input dl-loyalty__auth-input--code" type="text"'
+      + ' inputmode="numeric" maxlength="4" placeholder="0000" autocomplete="one-time-code">'
+      + '</div>'
+      + '<button class="dl-loyalty__auth-btn">Verify Code</button>'
+      + '<p class="dl-loyalty__auth-hint">Code expires in 15 minutes.</p>'
+      + '<button class="dl-loyalty__auth-back">Use a different email</button>';
+    self.el.appendChild(wrap);
+
+    var input   = wrap.querySelector('.dl-loyalty__auth-input--code');
+    var btn     = wrap.querySelector('.dl-loyalty__auth-btn');
+    var backBtn = wrap.querySelector('.dl-loyalty__auth-back');
+
+    backBtn.addEventListener('click', function () { self._renderEmailForm(); });
+
+    function verify() {
+      var code = input.value.replace(/\D/g, '');
+      if (code.length !== 4) return;
+      var existing = wrap.querySelector('.dl-loyalty__auth-err');
+      if (existing) existing.remove();
+      btn.disabled    = true;
+      btn.textContent = 'Verifying\u2026';
+
+      fetch(self.cfg.appUrl + '/api/auth/verify-otc', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ shop: self.cfg.shop, email: email, code: code }),
+      })
+        .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, data: d }; }); })
+        .then(function (result) {
+          if (!result.ok) {
+            btn.disabled    = false;
+            btn.textContent = 'Verify Code';
+            input.value     = '';
+            var err = document.createElement('div');
+            err.className   = 'dl-loyalty__auth-err';
+            err.textContent = result.data.error || 'Invalid code. Please try again.';
+            btn.parentNode.insertBefore(err, btn);
+            return;
+          }
+
+          var d = result.data;
+          saveSession(d.customerId, d.email, d.firstName);
+
+          // Shopify Plus → redirect via Multipass (logs customer into Shopify account)
+          if (d.multipassUrl) {
+            window.location.href = d.multipassUrl;
+            return;
+          }
+
+          // Dev store / non-Plus → load loyalty data directly
+          self._fetchAll(d.customerId);
+        })
+        .catch(function () {
+          btn.disabled    = false;
+          btn.textContent = 'Verify Code';
+          var err = document.createElement('div');
+          err.className   = 'dl-loyalty__auth-err';
+          err.textContent = 'Something went wrong. Please try again.';
+          btn.parentNode.insertBefore(err, btn);
+        });
+    }
+
+    btn.addEventListener('click', verify);
+    input.addEventListener('keydown', function (e) { if (e.key === 'Enter') verify(); });
+    // Auto-submit once 4 digits are entered
+    input.addEventListener('input', function () {
+      if (input.value.replace(/\D/g, '').length === 4) {
+        input.value = input.value.replace(/\D/g, '');
+        verify();
+      }
+    });
+    setTimeout(function () { input.focus(); }, 50);
+  };
+
+  LoyaltyWidget.prototype._fetchAll = function (customerId) {
+    var self = this;
+    self._customerId = customerId;   // remember for _redeem
+    var loyaltyUrl = self.cfg.appUrl + '/api/loyalty/customer/' + encodeURIComponent(customerId)
       + '?shop=' + encodeURIComponent(self.cfg.shop);
     var rewardsUrl = self.cfg.appUrl + '/api/loyalty/rewards?shop=' + encodeURIComponent(self.cfg.shop);
 
@@ -367,7 +573,7 @@
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         shop: self.cfg.shop,
-        shopifyCustomerId: self.cfg.customerId,
+        shopifyCustomerId: self._customerId || self.cfg.customerId,
         rewardId: rw.id,
       }),
     })

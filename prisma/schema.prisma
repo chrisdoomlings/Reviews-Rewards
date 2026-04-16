@@ -206,7 +206,8 @@ model ShopConfig {
 
 model LoginSession {
   id           String    @id @default(cuid())
-  customerId   String
+  customerId   String?                          // null until OTC verified & customer matched
+  email        String                           // email the OTC was sent to
   otcCode      String?                          // 4-digit one-time code
   otcExpiresAt DateTime?
   ipAddress    String?
@@ -214,7 +215,8 @@ model LoginSession {
   verifiedAt   DateTime?
   createdAt    DateTime  @default(now())
 
-  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  customer Customer? @relation(fields: [customerId], references: [id], onDelete: Cascade)
 
   @@index([customerId])
+  @@index([email])
 }
