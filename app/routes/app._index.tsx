@@ -86,34 +86,13 @@ const styles = {
 
 // ─── Editorial content (project-state, not DB data) ───────────────────────────
 
-const migrationChecklist = [
-  {
-    title: "Ends with Benefits parity",
-    description:
-      "Confirm imported tier names, thresholds, multipliers, and points currency before launch.",
-    status: "Needs input",
-  },
-  {
-    title: "Yotpo balance import",
-    description:
-      "Validate point balances and historical transactions on the development store before cutover.",
-    status: "In review",
-  },
-  {
-    title: "Pebble theme placement",
-    description:
-      "Verify app embed and product/account app blocks against the active Pebble version.",
-    status: "Ready",
-  },
-];
-
-const launchMilestones = [
-  { name: "Schema + points engine",            owner: "Developer",    status: "In progress", due: "Done" },
-  { name: "Loyalty admin dashboard",           owner: "Developer",    status: "In progress", due: "Done" },
-  { name: "Reviews + video moderation",        owner: "Support",      status: "In progress", due: "Done" },
-  { name: "Theme extension / storefront widget", owner: "Developer",  status: "Needs review", due: "Next" },
-  { name: "Multipass / OTC login",             owner: "Developer",    status: "Needs input",  due: "Next" },
-  { name: "Yotpo data migration",              owner: "Product + Ops", status: "Needs input", due: "TBD" },
+const integrationStatus = [
+  { name: "Shopify auth",       status: "Ready",        detail: "Session tokens active" },
+  { name: "Cloudflare R2",      status: "Ready",        detail: "Images & video storage live" },
+  { name: "Multipass login",    status: "Needs input",  detail: "Secret not yet configured" },
+  { name: "Supabase / Postgres", status: "In progress", detail: "Prisma migration pending" },
+  { name: "Attentive SMS",      status: "On track",     detail: "Active through July 2026" },
+  { name: "Video transcoding",  status: "In progress",  detail: "Cloudflare Worker queued" },
 ];
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -157,15 +136,67 @@ export default function Dashboard() {
 
   return (
     <s-page heading="Admin overview">
-      <s-section slot="aside" heading="Launch focus">
+      <s-section slot="aside" heading="Needs attention">
         <s-stack direction="block" gap="base">
-          <s-banner heading="Go-live blockers" tone="warning">
-            Confirm final Yotpo tier export and Pebble storefront placement before
-            enabling any production-facing automations.
-          </s-banner>
-          <s-button variant="primary">Review migration checklist</s-button>
-          <s-button>Open loyalty settings</s-button>
-          <s-button>Moderate pending reviews</s-button>
+          {d.reviewStats.flagged > 0 && (
+            <div
+              style={{
+                padding: "12px 14px",
+                borderRadius: "8px",
+                background: "#fde8e8",
+                border: "1px solid #b4231822",
+              }}
+            >
+              <div style={{ fontWeight: 700, fontSize: "13px", color: "#b42318", marginBottom: "2px" }}>
+                {d.reviewStats.flagged} flagged review{d.reviewStats.flagged !== 1 ? "s" : ""}
+              </div>
+              <div style={{ fontSize: "12px", color: "#5c5f62" }}>Requires moderation action</div>
+            </div>
+          )}
+          {d.reviewStats.pending > 0 && (
+            <div
+              style={{
+                padding: "12px 14px",
+                borderRadius: "8px",
+                background: "#fff1d6",
+                border: "1px solid #9a670022",
+              }}
+            >
+              <div style={{ fontWeight: 700, fontSize: "13px", color: "#9a6700", marginBottom: "2px" }}>
+                {d.reviewStats.pending} pending review{d.reviewStats.pending !== 1 ? "s" : ""}
+              </div>
+              <div style={{ fontSize: "12px", color: "#5c5f62" }}>Awaiting approve or reject</div>
+            </div>
+          )}
+          {d.expiringIn30Days > 0 && (
+            <div
+              style={{
+                padding: "12px 14px",
+                borderRadius: "8px",
+                background: "#e8f2ff",
+                border: "1px solid #005bd322",
+              }}
+            >
+              <div style={{ fontWeight: 700, fontSize: "13px", color: "#005bd3", marginBottom: "2px" }}>
+                {d.expiringIn30Days} member{d.expiringIn30Days !== 1 ? "s" : ""} expiring
+              </div>
+              <div style={{ fontSize: "12px", color: "#5c5f62" }}>Points lapsing within 30 days</div>
+            </div>
+          )}
+          {d.reviewStats.flagged === 0 && d.reviewStats.pending === 0 && d.expiringIn30Days === 0 && (
+            <div style={{ fontSize: "13px", color: "#5c5f62" }}>
+              Nothing needs attention right now.
+            </div>
+          )}
+          <div style={{ borderTop: "1px solid #e1e3e5", paddingTop: "12px" }}>
+            <div style={{ fontSize: "12px", fontWeight: 600, color: "#5c5f62", marginBottom: "8px", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+              Jump to
+            </div>
+            <s-stack direction="block" gap="tight">
+              <s-button url="/app/reviews">Review queue</s-button>
+              <s-button url="/app/loyalty">Loyalty settings</s-button>
+            </s-stack>
+          </div>
         </s-stack>
       </s-section>
 
@@ -194,32 +225,41 @@ export default function Dashboard() {
         </div>
       </s-section>
 
-      {/* ── Migration readiness ────────────────────────────────────── */}
-      <s-section heading="Migration readiness">
-        <s-stack direction="block" gap="base">
-          {migrationChecklist.map((item) => (
-            <div
-              key={item.title}
+      {/* ── Quick actions ──────────────────────────────────────────── */}
+      <s-section heading="Quick actions">
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+            gap: "10px",
+          }}
+        >
+          {[
+            { label: "Loyalty settings",   detail: "Tiers, multipliers, rules", href: "/app/loyalty",  color: "#005bd3" },
+            { label: "Moderate reviews",   detail: "Approve, reject, reply",    href: "/app/reviews",  color: "#b42318" },
+            { label: "Member table",       detail: "Browse & search members",   href: "/app/loyalty",  color: "#0a7d45" },
+            { label: "Reward catalog",     detail: "Add or edit rewards",       href: "/app/loyalty",  color: "#9a6700" },
+          ].map((action) => (
+            <a
+              key={action.label}
+              href={action.href}
               style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "flex-start",
-                gap: "16px",
-                padding: "14px 16px",
-                border: "1px solid #e1e3e5",
+                display: "block",
+                padding: "16px",
+                border: `1px solid ${action.color}22`,
                 borderRadius: "10px",
+                background: `${action.color}08`,
+                textDecoration: "none",
+                color: "inherit",
               }}
             >
-              <div style={{ flex: 1 }}>
-                <div style={{ fontWeight: 600, fontSize: "14px", marginBottom: "4px" }}>
-                  {item.title}
-                </div>
-                <div style={styles.muted}>{item.description}</div>
+              <div style={{ fontWeight: 700, fontSize: "14px", color: action.color, marginBottom: "4px" }}>
+                {action.label}
               </div>
-              <span style={styles.statusPill(item.status)}>{item.status}</span>
-            </div>
+              <div style={{ fontSize: "12px", color: "#5c5f62" }}>{action.detail}</div>
+            </a>
           ))}
-        </s-stack>
+        </div>
       </s-section>
 
       {/* ── Reviews snapshot ───────────────────────────────────────── */}
@@ -245,42 +285,108 @@ export default function Dashboard() {
         </div>
       </s-section>
 
-      {/* ── Launch milestones ──────────────────────────────────────── */}
-      <s-section heading="Launch milestones">
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px" }}>
-            <thead>
-              <tr style={{ borderBottom: "1px solid #d2d5d8" }}>
-                {["Milestone", "Owner", "Status", "Timing"].map((h) => (
-                  <th
-                    key={h}
-                    style={{
-                      textAlign: "left",
-                      padding: "10px 12px",
-                      color: "#5c5f62",
-                      fontSize: "12px",
-                      textTransform: "uppercase",
-                      letterSpacing: "0.04em",
-                    }}
-                  >
-                    {h}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {launchMilestones.map((row) => (
-                <tr key={row.name} style={{ borderBottom: "1px solid #eceeef" }}>
-                  <td style={{ padding: "12px", fontWeight: 600 }}>{row.name}</td>
-                  <td style={{ padding: "12px", color: "#5c5f62" }}>{row.owner}</td>
-                  <td style={{ padding: "12px" }}>
-                    <span style={styles.statusPill(row.status)}>{row.status}</span>
-                  </td>
-                  <td style={{ padding: "12px", color: "#5c5f62" }}>{row.due}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      {/* ── Points at risk ─────────────────────────────────────────── */}
+      <s-section heading="Points at risk">
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
+            gap: "12px",
+          }}
+        >
+          {[
+            {
+              label: "Expiring in 30 days",
+              value: d.expiringIn30Days.toLocaleString(),
+              detail: "members losing points soon",
+              tone: "#b42318",
+              bg: "#fde8e8",
+            },
+            {
+              label: "Total in circulation",
+              value: d.totalPointsInCirculation.toLocaleString(),
+              detail: "points across all members",
+              tone: "#005bd3",
+              bg: "#e8f2ff",
+            },
+            {
+              label: "Active rewards",
+              value: d.activeRewardsCount.toLocaleString(),
+              detail: "redemption options available",
+              tone: "#0a7d45",
+              bg: "#dff7e5",
+            },
+            {
+              label: "Total redemptions",
+              value: d.redemptionCount.toLocaleString(),
+              detail: "all-time redemptions",
+              tone: "#9a6700",
+              bg: "#fff1d6",
+            },
+          ].map((stat) => (
+            <div
+              key={stat.label}
+              style={{
+                padding: "16px",
+                borderRadius: "10px",
+                background: stat.bg,
+                border: `1px solid ${stat.tone}22`,
+              }}
+            >
+              <div style={{ fontSize: "28px", fontWeight: 700, color: stat.tone, marginBottom: "6px" }}>
+                {stat.value}
+              </div>
+              <div style={{ fontSize: "13px", fontWeight: 600, color: stat.tone, marginBottom: "2px" }}>
+                {stat.label}
+              </div>
+              <div style={{ fontSize: "12px", color: "#5c5f62" }}>{stat.detail}</div>
+            </div>
+          ))}
+        </div>
+      </s-section>
+
+      {/* ── Integration status ─────────────────────────────────────── */}
+      <s-section heading="Integration status">
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+            gap: "10px",
+          }}
+        >
+          {integrationStatus.map((item) => (
+            <div
+              key={item.name}
+              style={{
+                display: "flex",
+                alignItems: "flex-start",
+                gap: "12px",
+                padding: "14px 16px",
+                border: "1px solid #e1e3e5",
+                borderRadius: "10px",
+              }}
+            >
+              <div
+                style={{
+                  marginTop: "3px",
+                  width: "10px",
+                  height: "10px",
+                  flexShrink: 0,
+                  borderRadius: "50%",
+                  background: statusTone[item.status]?.color ?? "#5c5f62",
+                }}
+              />
+              <div>
+                <div style={{ fontWeight: 600, fontSize: "14px", marginBottom: "2px" }}>
+                  {item.name}
+                </div>
+                <div style={{ fontSize: "12px", color: "#5c5f62", marginBottom: "6px" }}>
+                  {item.detail}
+                </div>
+                <span style={styles.statusPill(item.status)}>{item.status}</span>
+              </div>
+            </div>
+          ))}
         </div>
       </s-section>
 
