@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { CSSProperties } from "react";
-import { Form, useLoaderData, useFetcher } from "react-router";
+import { Form, useLoaderData, useFetcher, useNavigate, useSearchParams } from "react-router";
 import type { ActionFunctionArgs, HeadersFunction, LoaderFunctionArgs } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
@@ -19,6 +19,10 @@ import {
   type TierConfig,
 } from "../loyalty.server";
 
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+type Tab = "overview" | "members" | "rules" | "rewards" | "tiers" | "referrals" | "settings";
+
 // ─── Loader ───────────────────────────────────────────────────────────────────
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
@@ -26,6 +30,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { shop } = session;
 
   const url = new URL(request.url);
+  const tab = (url.searchParams.get("tab") ?? "overview") as Tab;
   const search = url.searchParams.get("search") ?? "";
   const page = Math.max(1, Number(url.searchParams.get("page") ?? "1"));
 
@@ -40,6 +45,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   return {
     shop,
+    tab,
     search,
     overviewStats,
     tierCounts,
@@ -142,8 +148,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-type Tab = "overview" | "members" | "rules" | "rewards" | "tiers" | "referrals" | "settings";
-
 const TIER_COLORS: Record<string, { color: string; bg: string; border: string }> = {
   prepper:  { color: "#5c5f62", bg: "#f6f6f7", border: "#c9cccf" },
   survivor: { color: "#1a5c2e", bg: "#e8f5ed", border: "#1a5c2e33" },
@@ -218,11 +222,20 @@ export default function Loyalty() {
   const { overviewStats, tierCounts, members, memberTotal, memberPage, memberPageSize,
           rewards, shopConfig } = data;
 
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const fetcher = useFetcher<{ ok?: boolean }>();
   const submitting = fetcher.state !== "idle";
 
-  // UI state
-  const [activeTab, setActiveTab] = useState<Tab>("overview");
+  // Tab driven by URL so pagination/search GET forms preserve it
+  const activeTab = data.tab;
+  const setActiveTab = (t: Tab) => {
+    const p = new URLSearchParams(searchParams);
+    p.set("tab", t);
+    p.delete("page");
+    p.delete("search");
+    navigate(`?${p.toString()}`);
+  };
   const [rewardMode, setRewardMode] = useState<"none" | "add" | string>("none"); // "add" | rewardId
   const [rewardForm, setRewardForm] = useState(EMPTY_REWARD);
   const [editingTier, setEditingTier] = useState<string | null>(null);
@@ -353,21 +366,6 @@ export default function Loyalty() {
               })}
             </div>
           </s-section>
-
-          <s-section heading="Readiness checklist">
-            <s-stack direction="block" gap="base">
-              {[
-                "Confirm exact Ends with Benefits thresholds before migration cutover.",
-                "Validate OTC and silent re-auth flows against Plus Multipass configuration.",
-                "QA proactive redeemable-point prompts on PDP, cart, and account entry points.",
-              ].map((item) => (
-                <div key={item} style={{ padding: "12px 14px", border: "1px solid #e1e3e5", borderRadius: "10px", background: "#fff" }}>
-                  <span style={{ fontWeight: 600, marginRight: "6px" }}>Check:</span>
-                  <span style={styles.muted}>{item}</span>
-                </div>
-              ))}
-            </s-stack>
-          </s-section>
         </>
       )}
 
@@ -376,14 +374,13 @@ export default function Loyalty() {
         <>
           <s-section heading="Search">
             <Form method="get" style={{ display: "flex", gap: "8px", alignItems: "flex-end" }}>
+              <input type="hidden" name="tab" value="members" />
               <div style={{ flex: 1 }}>
                 <s-text-field name="search" label="Search members" defaultValue={data.search} placeholder="Email or name" />
               </div>
               <s-button type="submit">Search</s-button>
               {data.search && (
-                <s-button onClick={() => { window.location.href = window.location.pathname; }}>
-                  Clear
-                </s-button>
+                <s-button onClick={() => navigate("?tab=members")}>Clear</s-button>
               )}
             </Form>
           </s-section>
@@ -444,10 +441,20 @@ export default function Loyalty() {
                 <span>Page {memberPage} of {totalPages} ({memberTotal} members)</span>
                 <div style={{ display: "flex", gap: "8px" }}>
                   {memberPage > 1 && (
-                    <Form method="get"><input type="hidden" name="search" value={data.search} /><input type="hidden" name="page" value={memberPage - 1} /><s-button type="submit">Previous</s-button></Form>
+                    <Form method="get">
+                      <input type="hidden" name="tab"    value="members" />
+                      <input type="hidden" name="search" value={data.search} />
+                      <input type="hidden" name="page"   value={memberPage - 1} />
+                      <s-button type="submit">Previous</s-button>
+                    </Form>
                   )}
                   {memberPage < totalPages && (
-                    <Form method="get"><input type="hidden" name="search" value={data.search} /><input type="hidden" name="page" value={memberPage + 1} /><s-button type="submit">Next</s-button></Form>
+                    <Form method="get">
+                      <input type="hidden" name="tab"    value="members" />
+                      <input type="hidden" name="search" value={data.search} />
+                      <input type="hidden" name="page"   value={memberPage + 1} />
+                      <s-button type="submit">Next</s-button>
+                    </Form>
                   )}
                 </div>
               </div>
