@@ -199,7 +199,7 @@
       prevBtn.style.display  = single ? 'none' : '';
       nextBtn.style.display  = single ? 'none' : '';
       counter.style.display  = single ? 'none' : '';
-      counter.textContent    = (current + 1) + ' \u2f ' + photos.length;
+      counter.textContent    = (current + 1) + ' / ' + photos.length;
     }
 
     function close() {

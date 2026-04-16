@@ -21,6 +21,7 @@ database.sqlite
 .env.*
 
 theme/
+reviews.csv
 
 
 

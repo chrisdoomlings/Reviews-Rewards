@@ -117,7 +117,7 @@ model Review {
   shop              String
   customerId        String?                     // null = anonymous (unverified)
   shopifyOrderId    String?
-  shopifyProductId  String
+  shopifyProductId  String                      // "site" sentinel for store-level reviews
   shopifyVariantId  String?
   rating            Int                         // 1–5
   title             String?
@@ -127,6 +127,9 @@ model Review {
   adminReply        String?
   adminReplyAt      DateTime?
   flagged           Boolean   @default(false)   // auto-flag rules
+  yotpoReviewId     String?   @unique           // import dedup — null for native reviews
+  reviewerName      String?                     // display name (imported or guest)
+  reviewerEmail     String?                     // for customer matching
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
 
