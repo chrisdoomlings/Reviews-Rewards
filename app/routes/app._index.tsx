@@ -86,15 +86,6 @@ const styles = {
 
 // ─── Editorial content (project-state, not DB data) ───────────────────────────
 
-const integrationStatus = [
-  { name: "Shopify auth",       status: "Ready",        detail: "Session tokens active" },
-  { name: "Cloudflare R2",      status: "Ready",        detail: "Images & video storage live" },
-  { name: "Multipass login",    status: "Needs input",  detail: "Secret not yet configured" },
-  { name: "Supabase / Postgres", status: "In progress", detail: "Prisma migration pending" },
-  { name: "Attentive SMS",      status: "On track",     detail: "Active through July 2026" },
-  { name: "Video transcoding",  status: "In progress",  detail: "Cloudflare Worker queued" },
-];
-
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function Dashboard() {
@@ -340,51 +331,6 @@ export default function Dashboard() {
                 {stat.label}
               </div>
               <div style={{ fontSize: "12px", color: "#5c5f62" }}>{stat.detail}</div>
-            </div>
-          ))}
-        </div>
-      </s-section>
-
-      {/* ── Integration status ─────────────────────────────────────── */}
-      <s-section heading="Integration status">
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-            gap: "10px",
-          }}
-        >
-          {integrationStatus.map((item) => (
-            <div
-              key={item.name}
-              style={{
-                display: "flex",
-                alignItems: "flex-start",
-                gap: "12px",
-                padding: "14px 16px",
-                border: "1px solid #e1e3e5",
-                borderRadius: "10px",
-              }}
-            >
-              <div
-                style={{
-                  marginTop: "3px",
-                  width: "10px",
-                  height: "10px",
-                  flexShrink: 0,
-                  borderRadius: "50%",
-                  background: statusTone[item.status]?.color ?? "#5c5f62",
-                }}
-              />
-              <div>
-                <div style={{ fontWeight: 600, fontSize: "14px", marginBottom: "2px" }}>
-                  {item.name}
-                </div>
-                <div style={{ fontSize: "12px", color: "#5c5f62", marginBottom: "6px" }}>
-                  {item.detail}
-                </div>
-                <span style={styles.statusPill(item.status)}>{item.status}</span>
-              </div>
             </div>
           ))}
         </div>
