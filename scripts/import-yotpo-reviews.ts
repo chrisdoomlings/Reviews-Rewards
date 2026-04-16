@@ -165,7 +165,7 @@ async function main() {
         );
       } else {
         const review = await prisma.review.upsert({
-          where:  { yotpoReviewId },
+          where:  { shop_yotpoReviewId: { shop: SHOP, yotpoReviewId } },
           create: {
             shop:          SHOP,
             yotpoReviewId,

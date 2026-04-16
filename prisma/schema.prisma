@@ -127,7 +127,7 @@ model Review {
   adminReply        String?
   adminReplyAt      DateTime?
   flagged           Boolean   @default(false)   // auto-flag rules
-  yotpoReviewId     String?   @unique           // import dedup — null for native reviews
+  yotpoReviewId     String?                     // import dedup — null for native reviews
   reviewerName      String?                     // display name (imported or guest)
   reviewerEmail     String?                     // for customer matching
   createdAt         DateTime  @default(now())
@@ -137,6 +137,7 @@ model Review {
   photos   ReviewPhoto[]
   videos   ReviewVideo[]
 
+  @@unique([shop, yotpoReviewId])              // dedup per-shop (nulls are always distinct)
   @@index([shop, shopifyProductId])
   @@index([status])
   @@index([customerId])
