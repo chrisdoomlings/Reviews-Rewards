@@ -199,26 +199,23 @@
     self.el.appendChild(hero);
 
     // ── Tier progress ────────────────────────────────────────────────────────
-    if (loyalty.nextTier && loyalty.pointsToNextTier != null) {
-      var tierRange = loyalty.pointsToNextTier;
-      // We don't have the current tier's min, so estimate progress from current balance
-      // Show a progress bar: (balance mod gap) / gap where gap ≈ pointsToNextTier + a reasonable
-      // base. We'll just use % of pointsToNextTier remaining.
+    if (loyalty.nextTier && loyalty.pointsToNextTier != null && loyalty.nextTierMinPoints != null) {
+      var tierMin  = loyalty.tierMinPoints    || 0;
+      var tierMax  = loyalty.nextTierMinPoints;
+      var tierSpan = Math.max(tierMax - tierMin, 1);
+      var earned   = Math.min(loyalty.pointsBalance - tierMin, tierSpan);
+      var pct      = Math.min(100, Math.round((earned / tierSpan) * 100));
+
       var progWrap = document.createElement('div');
       progWrap.className = 'dl-loyalty__progress-wrap';
 
       var progHeader = document.createElement('div');
       progHeader.className = 'dl-loyalty__progress-header';
-      progHeader.innerHTML = '<span>' + esc(capitalize(loyalty.tier)) + '</span>'
-        + '<span>' + esc(capitalize(loyalty.nextTier)) + '</span>';
+      progHeader.innerHTML = '<span>' + esc(loyalty.tierDisplayName || capitalize(loyalty.tier)) + '</span>'
+        + '<span>' + esc(loyalty.nextTierDisplayName || capitalize(loyalty.nextTier)) + '</span>';
 
-      // We don't have the exact tier threshold, so show points remaining as a text
       var progTrack = document.createElement('div');
       progTrack.className = 'dl-loyalty__progress-track';
-      // Can't compute % without tier floor; show a partial fill based on balance vs. needed
-      // A rough heuristic: assume the tier gap is about 2x the remaining points
-      var estimatedGap = Math.max(tierRange * 2, 1);
-      var pct = Math.min(100, Math.round(((estimatedGap - tierRange) / estimatedGap) * 100));
       var progFill = document.createElement('div');
       progFill.className = 'dl-loyalty__progress-fill';
       progFill.style.width = pct + '%';
@@ -227,7 +224,7 @@
       var progSub = document.createElement('div');
       progSub.className = 'dl-loyalty__progress-sub';
       progSub.textContent = loyalty.pointsToNextTier.toLocaleString()
-        + ' points to ' + capitalize(loyalty.nextTier);
+        + ' points to ' + (loyalty.nextTierDisplayName || capitalize(loyalty.nextTier));
 
       progWrap.appendChild(progHeader);
       progWrap.appendChild(progTrack);

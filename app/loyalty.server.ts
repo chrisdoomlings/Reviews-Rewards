@@ -11,19 +11,34 @@ import prisma from "./db.server";
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface TierConfig {
-  name: string;          // internal key e.g. "bronze"
-  displayName: string;   // shown in UI e.g. "Bronze"
+  name: string;               // internal key e.g. "prepper"
+  displayName: string;        // shown in UI e.g. "Prepper"
   minPoints: number;
   earnMultiplier: number;
+  entryRewardPoints: number;  // bonus points awarded on tier entry
+  birthdayRewardPoints: number;
 }
 
 export interface EarningRulesConfig {
   basePointsPerDollar: number;
   purchaseEnabled: boolean;
+  // Reviews
   textReviewEnabled: boolean;
-  textReviewPoints: number;
+  textReviewPoints: number;   // product review (text only)
+  photoReviewPoints: number;  // photo review
   videoReviewEnabled: boolean;
-  videoReviewPoints: number;
+  videoReviewPoints: number;  // video review
+  // Social / account actions (one-time unless noted)
+  createAccountPoints: number;
+  smsSignupPoints: number;
+  facebookSharePoints: number;
+  facebookGroupPoints: number;
+  instagramFollowPoints: number;
+  tiktokFollowPoints: number;
+  discordJoinPoints: number;
+  twitchFollowPoints: number;
+  birthdayPoints: number;     // awarded once per year
+  referralPoints: number;     // awarded per successful referral
 }
 
 export interface ReviewSettingsConfig {
@@ -44,25 +59,48 @@ export interface ShopConfigData {
 
 // ─── Defaults ─────────────────────────────────────────────────────────────────
 
-// TODO: Replace tier values with confirmed "Ends with Benefits" data from Eric.
+// "Ends with Benefits" program — confirmed from Yotpo Loyalty dashboard Apr 2026.
 const DEFAULT_SHOP_CONFIG: ShopConfigData = {
-  pointsCurrencyName: "Doom Points",
-  expiryMonths: 12,
+  pointsCurrencyName: "points",
+  expiryMonths: 12,          // 12-month rolling from last earn or redeem
   expiryWarningDays: 30,
   launcherPromptsEnabled: true,
   silentReauthDays: 30,
   tiers: [
-    { name: "bronze", displayName: "Bronze", minPoints: 0,    earnMultiplier: 1.0 },
-    { name: "silver", displayName: "Silver", minPoints: 500,  earnMultiplier: 1.5 },
-    { name: "gold",   displayName: "Gold",   minPoints: 1500, earnMultiplier: 2.0 },
+    {
+      name: "prepper",   displayName: "Prepper",
+      minPoints: 0,   earnMultiplier: 1.0,
+      entryRewardPoints: 0,   birthdayRewardPoints: 0,
+    },
+    {
+      name: "survivor",  displayName: "Survivor",
+      minPoints: 250, earnMultiplier: 1.25,
+      entryRewardPoints: 50,  birthdayRewardPoints: 100,
+    },
+    {
+      name: "ruler",     displayName: "Ruler",
+      minPoints: 500, earnMultiplier: 1.5,
+      entryRewardPoints: 100, birthdayRewardPoints: 150,
+    },
   ],
   earningRules: {
-    basePointsPerDollar: 1,
-    purchaseEnabled: true,
-    textReviewEnabled: true,
-    textReviewPoints: 75,
-    videoReviewEnabled: true,
-    videoReviewPoints: 50,
+    basePointsPerDollar:    1,
+    purchaseEnabled:        true,
+    textReviewEnabled:      true,
+    textReviewPoints:       20,
+    photoReviewPoints:      20,
+    videoReviewEnabled:     true,
+    videoReviewPoints:      25,
+    createAccountPoints:    10,
+    smsSignupPoints:        25,
+    facebookSharePoints:    10,
+    facebookGroupPoints:    10,
+    instagramFollowPoints:  10,
+    tiktokFollowPoints:     10,
+    discordJoinPoints:      10,
+    twitchFollowPoints:     10,
+    birthdayPoints:         50,
+    referralPoints:         200,
   },
   reviewSettings: {
     flagKeywords: ["spam", "discount", "cheap", "external link"],
@@ -193,36 +231,49 @@ export async function awardPointsForOrder(input: AwardPointsInput): Promise<Awar
   });
 
   const currentTier = getTierForPoints(customer.pointsBalance, config.tiers);
-  const pointsToAward = Math.floor(
+  const purchasePoints = Math.floor(
     orderTotalUsd * config.earningRules.basePointsPerDollar * currentTier.earnMultiplier,
   );
 
-  const newBalance = customer.pointsBalance + pointsToAward;
-  const newTier = getTierForPoints(newBalance, config.tiers);
+  const balanceAfterPurchase = customer.pointsBalance + purchasePoints;
+  const newTier = getTierForPoints(balanceAfterPurchase, config.tiers);
+  const tierChanged = newTier.name !== currentTier.name;
+
+  // Award tier entry bonus if the customer just crossed into a new tier
+  const entryBonus = tierChanged ? newTier.entryRewardPoints : 0;
+  const totalPointsAwarded = purchasePoints + entryBonus;
+  const newBalance = balanceAfterPurchase + entryBonus;
   const newExpiry = addMonths(new Date(), config.expiryMonths);
 
-  await prisma.$transaction([
-    prisma.transaction.create({
+  await prisma.$transaction(async (tx) => {
+    await tx.transaction.create({
       data: {
         customerId: customer.id,
         type: "earn",
-        points: pointsToAward,
+        points: purchasePoints,
         description: `Order #${shopifyOrderId} — $${orderTotalUsd.toFixed(2)}`,
         orderId: shopifyOrderId,
       },
-    }),
-    prisma.customer.update({
+    });
+    await tx.customer.update({
       where: { id: customer.id },
-      data: {
-        pointsBalance: newBalance,
-        tier: newTier.name,
-        pointsExpiresAt: newExpiry,
-      },
-    }),
-  ]);
+      data: { pointsBalance: newBalance, tier: newTier.name, pointsExpiresAt: newExpiry },
+    });
+    // Record entry bonus as a separate row so history is readable
+    if (entryBonus > 0) {
+      await tx.transaction.create({
+        data: {
+          customerId: customer.id,
+          type: "earn",
+          points: entryBonus,
+          description: `${newTier.displayName} tier entry reward`,
+        },
+      });
+    }
+  });
 
   return {
-    pointsAwarded: pointsToAward,
+    pointsAwarded: totalPointsAwarded,
     newBalance,
     tier: newTier.name,
     alreadyProcessed: false,
@@ -236,8 +287,12 @@ export interface CustomerLoyaltyState {
   customerId: string | null;
   pointsBalance: number;
   tier: string;
+  tierDisplayName: string;
+  tierMinPoints: number;
   tierMultiplier: number;
   nextTier: string | null;
+  nextTierDisplayName: string | null;
+  nextTierMinPoints: number | null;
   pointsToNextTier: number | null;
   pointsExpiresAt: string | null;
   recentTransactions: {
@@ -259,15 +314,22 @@ export async function getCustomerLoyalty(shopifyCustomerId: string): Promise<Cus
     },
   });
 
+  const baseTier = DEFAULT_SHOP_CONFIG.tiers[0];
+  const baseNext = DEFAULT_SHOP_CONFIG.tiers[1];
+
   if (!customer) {
     return {
       found: false,
       customerId: null,
       pointsBalance: 0,
-      tier: DEFAULT_SHOP_CONFIG.tiers[0].name,
-      tierMultiplier: DEFAULT_SHOP_CONFIG.tiers[0].earnMultiplier,
-      nextTier: DEFAULT_SHOP_CONFIG.tiers[1]?.name ?? null,
-      pointsToNextTier: DEFAULT_SHOP_CONFIG.tiers[1]?.minPoints ?? null,
+      tier: baseTier.name,
+      tierDisplayName: baseTier.displayName,
+      tierMinPoints: baseTier.minPoints,
+      tierMultiplier: baseTier.earnMultiplier,
+      nextTier: baseNext?.name ?? null,
+      nextTierDisplayName: baseNext?.displayName ?? null,
+      nextTierMinPoints: baseNext?.minPoints ?? null,
+      pointsToNextTier: baseNext?.minPoints ?? null,
       pointsExpiresAt: null,
       recentTransactions: [],
     };
@@ -282,8 +344,12 @@ export async function getCustomerLoyalty(shopifyCustomerId: string): Promise<Cus
     customerId: customer.shopifyCustomerId,
     pointsBalance: customer.pointsBalance,
     tier: customer.tier,
+    tierDisplayName: currentTierConfig.displayName,
+    tierMinPoints: currentTierConfig.minPoints,
     tierMultiplier: currentTierConfig.earnMultiplier,
     nextTier: next?.name ?? null,
+    nextTierDisplayName: next?.displayName ?? null,
+    nextTierMinPoints: next?.minPoints ?? null,
     pointsToNextTier: next ? next.minPoints - customer.pointsBalance : null,
     pointsExpiresAt: customer.pointsExpiresAt?.toISOString() ?? null,
     recentTransactions: customer.transactions.map((t) => ({
@@ -550,35 +616,121 @@ export async function processRedemption(
 export async function awardPointsForReview(
   customerId: string,
   shop: string,
-  hasVideo: boolean,
+  reviewType: "text" | "photo" | "video",
 ): Promise<void> {
   const config = await getShopConfig(shop);
   if (!config.earningRules.textReviewEnabled) return;
 
-  let pointsToAward = config.earningRules.textReviewPoints;
-  let description = "Approved text review";
+  let pointsToAward: number;
+  let description: string;
 
-  if (hasVideo && config.earningRules.videoReviewEnabled) {
-    pointsToAward += config.earningRules.videoReviewPoints;
+  if (reviewType === "video" && config.earningRules.videoReviewEnabled) {
+    pointsToAward = config.earningRules.videoReviewPoints;
     description = "Approved video review";
+  } else if (reviewType === "photo") {
+    pointsToAward = config.earningRules.photoReviewPoints;
+    description = "Approved photo review";
+  } else {
+    pointsToAward = config.earningRules.textReviewPoints;
+    description = "Approved review";
   }
 
   if (pointsToAward <= 0) return;
+  await _awardPoints(customerId, config, pointsToAward, description);
+}
 
+// ─── Award points for a one-time / social action ──────────────────────────────
+
+export type LoyaltyActionType =
+  | "create_account"
+  | "sms_signup"
+  | "facebook_share"
+  | "facebook_group"
+  | "instagram_follow"
+  | "tiktok_follow"
+  | "discord_join"
+  | "twitch_follow"
+  | "birthday"
+  | "referral";
+
+const ACTION_LABELS: Record<LoyaltyActionType, string> = {
+  create_account:    "Account created",
+  sms_signup:        "SMS signup",
+  facebook_share:    "Facebook share",
+  facebook_group:    "Facebook group joined",
+  instagram_follow:  "Instagram follow",
+  tiktok_follow:     "TikTok follow",
+  discord_join:      "Discord joined",
+  twitch_follow:     "Twitch follow",
+  birthday:          "Birthday reward",
+  referral:          "Referral reward",
+};
+
+export async function awardPointsForAction(
+  customerId: string,
+  shop: string,
+  action: LoyaltyActionType,
+): Promise<{ pointsAwarded: number; newBalance: number }> {
+  const config = await getShopConfig(shop);
+  const rules   = config.earningRules;
+
+  const pointsMap: Record<LoyaltyActionType, number> = {
+    create_account:   rules.createAccountPoints,
+    sms_signup:       rules.smsSignupPoints,
+    facebook_share:   rules.facebookSharePoints,
+    facebook_group:   rules.facebookGroupPoints,
+    instagram_follow: rules.instagramFollowPoints,
+    tiktok_follow:    rules.tiktokFollowPoints,
+    discord_join:     rules.discordJoinPoints,
+    twitch_follow:    rules.twitchFollowPoints,
+    birthday:         rules.birthdayPoints,
+    referral:         rules.referralPoints,
+  };
+
+  const points = pointsMap[action] ?? 0;
+  if (points <= 0) return { pointsAwarded: 0, newBalance: 0 };
+
+  const newBalance = await _awardPoints(customerId, config, points, ACTION_LABELS[action]);
+  return { pointsAwarded: points, newBalance };
+}
+
+// ─── Shared internal: award points + update tier + expiry ────────────────────
+
+async function _awardPoints(
+  customerId: string,
+  config: ShopConfigData,
+  points: number,
+  description: string,
+): Promise<number> {
   const customer = await prisma.customer.findUnique({ where: { id: customerId } });
-  if (!customer) return;
+  if (!customer) return 0;
 
-  const newBalance = customer.pointsBalance + pointsToAward;
-  const newTier = getTierForPoints(newBalance, config.tiers);
-  const newExpiry = addMonths(new Date(), config.expiryMonths);
+  const prevTier   = getTierForPoints(customer.pointsBalance, config.tiers);
+  const newBalance = customer.pointsBalance + points;
+  const newTier    = getTierForPoints(newBalance, config.tiers);
+  const tierChanged = newTier.name !== prevTier.name;
+  const entryBonus  = tierChanged ? newTier.entryRewardPoints : 0;
+  const finalBalance = newBalance + entryBonus;
+  const newExpiry    = addMonths(new Date(), config.expiryMonths);
 
-  await prisma.$transaction([
-    prisma.transaction.create({
-      data: { customerId, type: "earn", points: pointsToAward, description },
-    }),
-    prisma.customer.update({
+  await prisma.$transaction(async (tx) => {
+    await tx.transaction.create({
+      data: { customerId, type: "earn", points, description },
+    });
+    await tx.customer.update({
       where: { id: customerId },
-      data: { pointsBalance: newBalance, tier: newTier.name, pointsExpiresAt: newExpiry },
-    }),
-  ]);
+      data: { pointsBalance: finalBalance, tier: newTier.name, pointsExpiresAt: newExpiry },
+    });
+    if (entryBonus > 0) {
+      await tx.transaction.create({
+        data: {
+          customerId,
+          type: "earn",
+          points: entryBonus,
+          description: `${newTier.displayName} tier entry reward`,
+        },
+      });
+    }
+  });
+  return finalBalance;
 }

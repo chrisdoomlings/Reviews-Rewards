@@ -138,7 +138,10 @@ export async function getReviewsPage(
 export async function approveReview(reviewId: string, shop: string): Promise<void> {
   const review = await prisma.review.findUnique({
     where: { id: reviewId },
-    include: { videos: { where: { status: { not: "failed" } }, take: 1 } },
+    include: {
+      videos: { where: { status: { not: "failed" } }, take: 1 },
+      photos: { take: 1 },
+    },
   });
   if (!review || review.status === "approved") return; // idempotency
 
@@ -154,7 +157,10 @@ export async function approveReview(reviewId: string, shop: string): Promise<voi
   }
 
   if (review.customerId) {
-    await awardPointsForReview(review.customerId, shop, review.videos.length > 0);
+    const reviewType = review.videos.length > 0 ? "video"
+      : review.photos.length > 0 ? "photo"
+      : "text";
+    await awardPointsForReview(review.customerId, shop, reviewType);
   }
 }
 

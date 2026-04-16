@@ -78,12 +78,23 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     case "save-rules": {
       await saveShopConfig(shop, {
         earningRules: {
-          basePointsPerDollar: Number(formData.get("basePointsPerDollar") || 1),
-          purchaseEnabled: formData.get("purchaseEnabled") === "true",
-          textReviewEnabled: formData.get("textReviewEnabled") === "true",
-          textReviewPoints: Number(formData.get("textReviewPoints") || 75),
-          videoReviewEnabled: formData.get("videoReviewEnabled") === "true",
-          videoReviewPoints: Number(formData.get("videoReviewPoints") || 50),
+          basePointsPerDollar:   Number(formData.get("basePointsPerDollar")   || 1),
+          purchaseEnabled:        formData.get("purchaseEnabled")  === "true",
+          textReviewEnabled:      formData.get("textReviewEnabled") === "true",
+          textReviewPoints:      Number(formData.get("textReviewPoints")      || 20),
+          photoReviewPoints:     Number(formData.get("photoReviewPoints")     || 20),
+          videoReviewEnabled:     formData.get("videoReviewEnabled") === "true",
+          videoReviewPoints:     Number(formData.get("videoReviewPoints")     || 25),
+          createAccountPoints:   Number(formData.get("createAccountPoints")   || 10),
+          smsSignupPoints:       Number(formData.get("smsSignupPoints")       || 25),
+          facebookSharePoints:   Number(formData.get("facebookSharePoints")   || 10),
+          facebookGroupPoints:   Number(formData.get("facebookGroupPoints")   || 10),
+          instagramFollowPoints: Number(formData.get("instagramFollowPoints") || 10),
+          tiktokFollowPoints:    Number(formData.get("tiktokFollowPoints")    || 10),
+          discordJoinPoints:     Number(formData.get("discordJoinPoints")     || 10),
+          twitchFollowPoints:    Number(formData.get("twitchFollowPoints")    || 10),
+          birthdayPoints:        Number(formData.get("birthdayPoints")        || 50),
+          referralPoints:        Number(formData.get("referralPoints")        || 200),
         },
       });
       return Response.json({ ok: true });
@@ -134,9 +145,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 type Tab = "overview" | "members" | "rules" | "rewards" | "tiers" | "referrals" | "settings";
 
 const TIER_COLORS: Record<string, { color: string; bg: string; border: string }> = {
-  bronze: { color: "#b65b30", bg: "#fff4ee", border: "#b65b3033" },
-  silver: { color: "#576f86", bg: "#f3f6f8", border: "#576f8633" },
-  gold:   { color: "#aa7600", bg: "#fff8e1", border: "#aa760033" },
+  prepper:  { color: "#5c5f62", bg: "#f6f6f7", border: "#c9cccf" },
+  survivor: { color: "#1a5c2e", bg: "#e8f5ed", border: "#1a5c2e33" },
+  ruler:    { color: "#7c4b00", bg: "#fff4e0", border: "#7c4b0033" },
 };
 const fallbackColor = { color: "#5c5f62", bg: "#f6f6f7", border: "#e1e3e5" };
 const tc = (name: string) => TIER_COLORS[name.toLowerCase()] ?? fallbackColor;
@@ -215,7 +226,7 @@ export default function Loyalty() {
   const [rewardMode, setRewardMode] = useState<"none" | "add" | string>("none"); // "add" | rewardId
   const [rewardForm, setRewardForm] = useState(EMPTY_REWARD);
   const [editingTier, setEditingTier] = useState<string | null>(null);
-  const [tierForms, setTierForms] = useState<Record<string, { displayName: string; minPoints: string; earnMultiplier: string }>>({});
+  const [tierForms, setTierForms] = useState<Record<string, { displayName: string; minPoints: string; earnMultiplier: string; entryRewardPoints: string; birthdayRewardPoints: string }>>({});
 
   // Settings form — pre-seeded from loader data
   const [settingsForm, setSettingsForm] = useState({
@@ -243,7 +254,13 @@ export default function Loyalty() {
   const openEditTier = (t: TierConfig) => {
     setTierForms((prev) => ({
       ...prev,
-      [t.name]: { displayName: t.displayName, minPoints: String(t.minPoints), earnMultiplier: String(t.earnMultiplier) },
+      [t.name]: {
+        displayName:          t.displayName,
+        minPoints:            String(t.minPoints),
+        earnMultiplier:       String(t.earnMultiplier),
+        entryRewardPoints:    String(t.entryRewardPoints),
+        birthdayRewardPoints: String(t.birthdayRewardPoints),
+      },
     }));
     setEditingTier(t.name);
   };
@@ -252,7 +269,14 @@ export default function Loyalty() {
     if (!f) return;
     const updatedTiers = shopConfig.tiers.map((t) =>
       t.name === tierName
-        ? { ...t, displayName: f.displayName, minPoints: Number(f.minPoints), earnMultiplier: Number(f.earnMultiplier) }
+        ? {
+            ...t,
+            displayName:          f.displayName,
+            minPoints:            Number(f.minPoints),
+            earnMultiplier:       Number(f.earnMultiplier),
+            entryRewardPoints:    Number(f.entryRewardPoints),
+            birthdayRewardPoints: Number(f.birthdayRewardPoints),
+          }
         : t,
     );
     fetcher.submit({ intent: "save-tiers", tiers: JSON.stringify(updatedTiers) }, { method: "post" });
@@ -436,63 +460,74 @@ export default function Loyalty() {
       {activeTab === "rules" && (
         <s-section heading="Earning rules">
           <fetcher.Form method="post">
-            <input type="hidden" name="intent" value="save-rules" />
-            <input type="hidden" name="purchaseEnabled" value={String(shopConfig.earningRules.purchaseEnabled)} />
-            <input type="hidden" name="textReviewEnabled" value={String(shopConfig.earningRules.textReviewEnabled)} />
-            <input type="hidden" name="videoReviewEnabled" value={String(shopConfig.earningRules.videoReviewEnabled)} />
+            <input type="hidden" name="intent"              value="save-rules" />
+            <input type="hidden" name="purchaseEnabled"     value={String(shopConfig.earningRules.purchaseEnabled)} />
+            <input type="hidden" name="textReviewEnabled"   value={String(shopConfig.earningRules.textReviewEnabled)} />
+            <input type="hidden" name="videoReviewEnabled"  value={String(shopConfig.earningRules.videoReviewEnabled)} />
             <s-stack direction="block" gap="base">
+
+              {/* ── Purchases ── */}
+              <div style={{ fontWeight: 700, fontSize: "13px", color: "#5c5f62", textTransform: "uppercase", letterSpacing: ".04em", marginTop: "4px" }}>Purchases</div>
               {[
-                {
-                  label: "Purchase points",
-                  description: "Points granted per dollar spent before tier multiplier.",
-                  source: "orders/paid webhook",
-                  enabled: shopConfig.earningRules.purchaseEnabled,
-                  field: (
-                    <s-text-field
-                      label="Points per $1"
-                      name="basePointsPerDollar"
-                      value={String(shopConfig.earningRules.basePointsPerDollar)}
-                    />
-                  ),
-                },
-                {
-                  label: "Written review",
-                  description: "Awarded after a verified written review is approved.",
-                  source: "Approved review",
-                  enabled: shopConfig.earningRules.textReviewEnabled,
-                  field: (
-                    <s-text-field
-                      label="Points"
-                      name="textReviewPoints"
-                      value={String(shopConfig.earningRules.textReviewPoints)}
-                    />
-                  ),
-                },
-                {
-                  label: "Video review bonus",
-                  description: "Additional reward for approved video attached to a review.",
-                  source: "Approved review video",
-                  enabled: shopConfig.earningRules.videoReviewEnabled,
-                  field: (
-                    <s-text-field
-                      label="Points"
-                      name="videoReviewPoints"
-                      value={String(shopConfig.earningRules.videoReviewPoints)}
-                    />
-                  ),
-                },
-              ].map((rule) => (
-                <div key={rule.label} style={{ ...styles.card, opacity: rule.enabled ? 1 : 0.6 }}>
+                { label: "Purchase points", desc: "Per $1 spent before tier multiplier. Applied on orders/paid webhook.", name: "basePointsPerDollar", val: shopConfig.earningRules.basePointsPerDollar, unit: "pts / $1" },
+              ].map((r) => (
+                <div key={r.name} style={styles.card}>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 160px", gap: "16px", alignItems: "center" }}>
-                    <div>
-                      <div style={{ fontWeight: 600, marginBottom: "4px" }}>{rule.label}</div>
-                      <div style={{ ...styles.muted, marginBottom: "4px" }}>{rule.description}</div>
-                      <div style={{ fontSize: "12px", color: "#5c5f62" }}>Source: {rule.source}</div>
-                    </div>
-                    {rule.field}
+                    <div><div style={{ fontWeight: 600, marginBottom: "4px" }}>{r.label}</div><div style={styles.muted}>{r.desc}</div></div>
+                    <s-text-field label={r.unit} name={r.name} value={String(r.val)} />
                   </div>
                 </div>
               ))}
+
+              {/* ── Reviews ── */}
+              <div style={{ fontWeight: 700, fontSize: "13px", color: "#5c5f62", textTransform: "uppercase", letterSpacing: ".04em", marginTop: "8px" }}>Reviews</div>
+              {[
+                { label: "Text review",  desc: "Approved written review (no media).",         name: "textReviewPoints",  val: shopConfig.earningRules.textReviewPoints },
+                { label: "Photo review", desc: "Approved review with at least one photo.",     name: "photoReviewPoints", val: shopConfig.earningRules.photoReviewPoints },
+                { label: "Video review", desc: "Approved review with video.",                  name: "videoReviewPoints", val: shopConfig.earningRules.videoReviewPoints },
+              ].map((r) => (
+                <div key={r.name} style={styles.card}>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 160px", gap: "16px", alignItems: "center" }}>
+                    <div><div style={{ fontWeight: 600, marginBottom: "4px" }}>{r.label}</div><div style={styles.muted}>{r.desc}</div></div>
+                    <s-text-field label="Points" name={r.name} value={String(r.val)} />
+                  </div>
+                </div>
+              ))}
+
+              {/* ── Social / account ── */}
+              <div style={{ fontWeight: 700, fontSize: "13px", color: "#5c5f62", textTransform: "uppercase", letterSpacing: ".04em", marginTop: "8px" }}>Social &amp; account (one-time)</div>
+              {[
+                { label: "Create account",    desc: "Awarded once on first account registration.",    name: "createAccountPoints",   val: shopConfig.earningRules.createAccountPoints },
+                { label: "SMS signup",         desc: "Awarded once for SMS/Attentive opt-in.",         name: "smsSignupPoints",       val: shopConfig.earningRules.smsSignupPoints },
+                { label: "Facebook share",    desc: "Share a product on Facebook.",                   name: "facebookSharePoints",   val: shopConfig.earningRules.facebookSharePoints },
+                { label: "Facebook group",    desc: "Join the Doomlings Facebook group.",             name: "facebookGroupPoints",   val: shopConfig.earningRules.facebookGroupPoints },
+                { label: "Instagram follow",  desc: "Follow Doomlings on Instagram.",                 name: "instagramFollowPoints", val: shopConfig.earningRules.instagramFollowPoints },
+                { label: "TikTok follow",     desc: "Follow Doomlings on TikTok.",                    name: "tiktokFollowPoints",    val: shopConfig.earningRules.tiktokFollowPoints },
+                { label: "Discord join",      desc: "Join the Doomlings Discord server.",             name: "discordJoinPoints",     val: shopConfig.earningRules.discordJoinPoints },
+                { label: "Twitch follow",     desc: "Follow Doomlings on Twitch.",                    name: "twitchFollowPoints",    val: shopConfig.earningRules.twitchFollowPoints },
+              ].map((r) => (
+                <div key={r.name} style={styles.card}>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 160px", gap: "16px", alignItems: "center" }}>
+                    <div><div style={{ fontWeight: 600, marginBottom: "4px" }}>{r.label}</div><div style={styles.muted}>{r.desc}</div></div>
+                    <s-text-field label="Points" name={r.name} value={String(r.val)} />
+                  </div>
+                </div>
+              ))}
+
+              {/* ── Recurring ── */}
+              <div style={{ fontWeight: 700, fontSize: "13px", color: "#5c5f62", textTransform: "uppercase", letterSpacing: ".04em", marginTop: "8px" }}>Recurring</div>
+              {[
+                { label: "Birthday reward",  desc: "Awarded once per year on the customer's birthday.", name: "birthdayPoints",  val: shopConfig.earningRules.birthdayPoints },
+                { label: "Referral reward",  desc: "Awarded to referring customer per successful referral.", name: "referralPoints", val: shopConfig.earningRules.referralPoints },
+              ].map((r) => (
+                <div key={r.name} style={styles.card}>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 160px", gap: "16px", alignItems: "center" }}>
+                    <div><div style={{ fontWeight: 600, marginBottom: "4px" }}>{r.label}</div><div style={styles.muted}>{r.desc}</div></div>
+                    <s-text-field label="Points" name={r.name} value={String(r.val)} />
+                  </div>
+                </div>
+              ))}
+
               <div>
                 <s-button variant="primary" type="submit" disabled={submitting}>
                   {submitting ? "Saving…" : "Save earning rules"}
@@ -610,13 +645,19 @@ export default function Loyalty() {
 
                   {isEditing && f && (
                     <div style={{ marginTop: "12px", padding: "14px", background: "rgba(255,255,255,0.7)", borderRadius: "10px" }}>
-                      <div style={styles.grid("repeat(3, minmax(0,1fr))")}>
+                      <div style={{ ...styles.grid("repeat(3, minmax(0,1fr))"), marginBottom: "12px" }}>
                         <s-text-field label="Display name" value={f.displayName}
                           onInput={(e: any) => setTierForms((prev) => ({ ...prev, [tier.name]: { ...prev[tier.name], displayName: e.target.value } }))} />
                         <s-text-field label="Min points threshold" value={f.minPoints}
                           onInput={(e: any) => setTierForms((prev) => ({ ...prev, [tier.name]: { ...prev[tier.name], minPoints: e.target.value } }))} />
                         <s-text-field label="Earn multiplier" value={f.earnMultiplier}
                           onInput={(e: any) => setTierForms((prev) => ({ ...prev, [tier.name]: { ...prev[tier.name], earnMultiplier: e.target.value } }))} />
+                      </div>
+                      <div style={styles.grid("repeat(2, minmax(0,1fr))")}>
+                        <s-text-field label="Entry reward (points)" value={f.entryRewardPoints}
+                          onInput={(e: any) => setTierForms((prev) => ({ ...prev, [tier.name]: { ...prev[tier.name], entryRewardPoints: e.target.value } }))} />
+                        <s-text-field label="Birthday reward (points)" value={f.birthdayRewardPoints}
+                          onInput={(e: any) => setTierForms((prev) => ({ ...prev, [tier.name]: { ...prev[tier.name], birthdayRewardPoints: e.target.value } }))} />
                       </div>
                       <div style={{ display: "flex", gap: "8px", marginTop: "12px" }}>
                         <s-button variant="primary" onClick={() => saveTier(tier.name)} disabled={submitting}>
