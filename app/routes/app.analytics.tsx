@@ -24,7 +24,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function fmt(n: number) {
-  return n.toLocaleString();
+  if (n >= 1000) {
+    const k = Math.round(n / 100) / 10;
+    return (Number.isInteger(k) ? k : k) + "k";
+  }
+  return String(n);
 }
 
 function pctChange(pct: number) {

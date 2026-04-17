@@ -123,6 +123,14 @@ export function shouldRevalidate({
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+function fmtK(n: number): string {
+  if (n >= 1000) {
+    const k = Math.round(n / 100) / 10;
+    return (Number.isInteger(k) ? k : k) + "k";
+  }
+  return String(n);
+}
+
 function stars(n: number, size = 15) {
   return (
     <span style={{ color: "#f59e0b", fontSize: size, letterSpacing: 1 }}>
@@ -391,13 +399,13 @@ export default function Reviews() {
                   { label: "Flagged",  value: stats.flagged, bg: "#fef2f2", color: "#b91c1c" },
                 ].map((s) => (
                   <div key={s.label} style={{ background: s.bg, borderRadius: "8px", padding: "10px 12px" }}>
-                    <div style={{ fontSize: "22px", fontWeight: 800, color: s.color }}>{s.value}</div>
+                    <div style={{ fontSize: "22px", fontWeight: 800, color: s.color }}>{fmtK(s.value)}</div>
                     <div style={{ fontSize: "11px", color: s.color, opacity: 0.8, fontWeight: 600 }}>{s.label}</div>
                   </div>
                 ))}
               </div>
               <div style={{ background: "#f9fafb", borderRadius: "8px", padding: "10px 12px" }}>
-                <div style={{ fontSize: "22px", fontWeight: 800, color: "#111827" }}>{reviewTotal}</div>
+                <div style={{ fontSize: "22px", fontWeight: 800, color: "#111827" }}>{fmtK(reviewTotal)}</div>
                 <div style={{ fontSize: "11px", color: "#6b7280", fontWeight: 600 }}>Total reviews</div>
               </div>
             </div>
@@ -454,7 +462,7 @@ export default function Reviews() {
                         background: `linear-gradient(to right, ${rating === n ? "#2563eb" : "#d1fae5"} ${pct}%, #f3f4f6 ${pct}%)`,
                       }} />
                     </span>
-                    <span style={{ fontSize: "11px", color: "#9ca3af", marginLeft: "6px", fontWeight: 500 }}>{count}</span>
+                    <span style={{ fontSize: "11px", color: "#9ca3af", marginLeft: "6px", fontWeight: 500 }}>{fmtK(count)}</span>
                   </button>
                 );
               })}
@@ -575,7 +583,7 @@ export default function Reviews() {
                   ← Previous
                 </button>
                 <span style={{ fontSize: "13px", color: "#6b7280" }}>
-                  {reviewTotal.toLocaleString()} total
+                  {fmtK(reviewTotal)} total
                 </span>
                 <button
                   disabled={!hasMore}
