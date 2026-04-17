@@ -13,6 +13,10 @@ export default function App() {
         />
         <Meta />
         <Links />
+        <style>{`
+          s-page { --s-page-max-inline-size: 100% !important; }
+          s-section { --s-section-padding-inline: 20px !important; }
+        `}</style>
       </head>
       <body>
         <Outlet />

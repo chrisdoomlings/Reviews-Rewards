@@ -1,4 +1,4 @@
-import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
+import type { HeadersFunction, LoaderFunctionArgs, ShouldRevalidateFunctionArgs } from "react-router";
 import { NavLink, Outlet, useLoaderData, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
@@ -20,6 +20,7 @@ export default function App() {
       <s-app-nav>
         <NavLink to="/app" end>Dashboard</NavLink>
         <NavLink to="/app/reviews">Reviews</NavLink>
+        <NavLink to="/app/analytics">Analytics</NavLink>
         <NavLink to="/app/loyalty">Loyalty</NavLink>
         <NavLink to="/app/settings">Settings</NavLink>
       </s-app-nav>
@@ -31,6 +32,12 @@ export default function App() {
 // Shopify needs React Router to catch some thrown responses, so that their headers are included in the response.
 export function ErrorBoundary() {
   return boundary.error(useRouteError());
+}
+
+// apiKey is a static env var — never re-run the layout loader on navigations.
+// Child routes all call authenticate.admin() themselves so auth is still enforced.
+export function shouldRevalidate(_: ShouldRevalidateFunctionArgs) {
+  return false;
 }
 
 export const headers: HeadersFunction = (headersArgs) => {

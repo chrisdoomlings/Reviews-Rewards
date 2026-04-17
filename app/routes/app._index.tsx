@@ -1,12 +1,11 @@
 import type { CSSProperties } from "react";
-import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
+import type { HeadersFunction, LoaderFunctionArgs, ShouldRevalidateFunctionArgs } from "react-router";
 import { useLoaderData } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 
 import { authenticate } from "../shopify.server";
-import { getOverviewStats } from "../loyalty.server";
+import { getOverviewStats, getDashboardExtras } from "../loyalty.server";
 import { getReviewStats } from "../reviews.server";
-import prisma from "../db.server";
 
 // ─── Loader ───────────────────────────────────────────────────────────────────
 
@@ -14,44 +13,32 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const { shop } = session;
 
-  const [loyaltyStats, reviewStats, balanceAgg, redemptionCount, recentTransactions] =
-    await Promise.all([
-      getOverviewStats(shop),
-      getReviewStats(shop),
-      // Sum of current points balances across all customers
-      prisma.customer.aggregate({ where: { shop }, _sum: { pointsBalance: true } }),
-      // Total redemptions ever made
-      prisma.redemption.count({ where: { customer: { shop } } }),
-      // Last 5 earn transactions for the activity feed
-      prisma.transaction.findMany({
-        where: { customer: { shop }, type: "earn" },
-        orderBy: { createdAt: "desc" },
-        take: 5,
-        include: { customer: { select: { email: true, firstName: true, lastName: true } } },
-      }),
-    ]);
+  // All three functions are cached (60–120 s TTL) so subsequent navigations
+  // back to the dashboard are served from memory, not from Supabase.
+  const [loyaltyStats, reviewStats, extras] = await Promise.all([
+    getOverviewStats(shop),
+    getReviewStats(shop),
+    getDashboardExtras(shop),
+  ]);
 
   return {
-    totalMembers: loyaltyStats.totalMembers,
-    totalPointsInCirculation: balanceAgg._sum.pointsBalance ?? 0,
-    expiringIn30Days: loyaltyStats.expiringIn30Days,
-    activeRewardsCount: loyaltyStats.activeRewardsCount,
-    redemptionCount,
+    totalMembers:             loyaltyStats.totalMembers,
+    totalPointsInCirculation: extras.totalPointsInCirculation,
+    expiringIn30Days:         loyaltyStats.expiringIn30Days,
+    activeRewardsCount:       loyaltyStats.activeRewardsCount,
+    redemptionCount:          extras.redemptionCount,
     reviewStats,
-    recentTransactions: recentTransactions.map((t) => {
-      const name = t.customer
-        ? [t.customer.firstName, t.customer.lastName].filter(Boolean).join(" ") ||
-          t.customer.email
-        : "Unknown";
-      return {
-        id: t.id,
-        label: `${name} — ${t.points.toLocaleString()} pts`,
-        meta: t.description ?? "Earn event",
-        time: t.createdAt.toISOString(),
-      };
-    }),
+    recentTransactions:       extras.recentTransactions,
   };
 };
+
+// Don't re-run the dashboard loader when navigating between tabs —
+// the cached stats are fresh enough for an admin overview.
+// The loader will still run on mutations (POST/PATCH/DELETE) or hard refresh.
+export function shouldRevalidate({ formMethod }: ShouldRevalidateFunctionArgs) {
+  if (formMethod && formMethod.toUpperCase() !== "GET") return true;
+  return false;
+}
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 

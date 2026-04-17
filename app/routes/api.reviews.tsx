@@ -1,6 +1,7 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import prisma from "../db.server";
 import { getShopConfig } from "../loyalty.server";
+import { cancelReviewEmailsForOrder } from "../email.server";
 import { corsJson, corsPreflight, CORS_HEADERS } from "../cors.server";
 
 export const loader = ({ request }: LoaderFunctionArgs) => {
@@ -123,6 +124,11 @@ export async function action({ request }: ActionFunctionArgs) {
     await prisma.reviewVideo.create({
       data: { reviewId: review.id, r2KeyRaw: videoKey, status: "pending" },
     });
+  }
+
+  // Cancel any pending review request / reminder emails for this order
+  if (shopifyOrderId) {
+    await cancelReviewEmailsForOrder(shop, shopifyOrderId);
   }
 
   return corsJson({ reviewId: review.id, status: review.status }, { status: 201 });

@@ -138,9 +138,18 @@ model Review {
   videos   ReviewVideo[]
 
   @@unique([shop, yotpoReviewId])              // dedup per-shop (nulls are always distinct)
-  @@index([shop, shopifyProductId])
-  @@index([status])
-  @@index([customerId])
+
+  // ── Query indexes ─────────────────────────────────────────────────────────
+  // Covers the most common admin list query: shop + status filter + date sort
+  @@index([shop, status, createdAt(sort: Desc)])
+  // Covers flagged moderation queue
+  @@index([shop, flagged, status])
+  // Covers star rating filter
+  @@index([shop, rating, createdAt(sort: Desc)])
+  // Covers product-level review pages on the storefront
+  @@index([shop, shopifyProductId, status, createdAt(sort: Desc)])
+  // Covers customer review history lookups
+  @@index([customerId, createdAt(sort: Desc)])
 }
 
 // ─── Review photos ────────────────────────────────────────────────────────────

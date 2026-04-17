@@ -8,6 +8,26 @@
 
 import prisma from "./db.server";
 
+// ─── Simple in-process cache (same pattern as reviews.server.ts) ──────────────
+
+interface CacheEntry<T> { value: T; expiresAt: number }
+const cache = new Map<string, CacheEntry<unknown>>();
+
+function cached<T>(key: string, ttlMs: number, fn: () => Promise<T>): Promise<T> {
+  const hit = cache.get(key) as CacheEntry<T> | undefined;
+  if (hit && hit.expiresAt > Date.now()) return Promise.resolve(hit.value);
+  return fn().then((value) => {
+    cache.set(key, { value, expiresAt: Date.now() + ttlMs });
+    return value;
+  });
+}
+
+export function invalidateLoyaltyCache(shop: string) {
+  for (const key of cache.keys()) {
+    if (key.startsWith(shop)) cache.delete(key);
+  }
+}
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface TierConfig {
@@ -110,21 +130,25 @@ const DEFAULT_SHOP_CONFIG: ShopConfigData = {
 
 // ─── Shop config ──────────────────────────────────────────────────────────────
 
-export async function getShopConfig(shop: string): Promise<ShopConfigData> {
-  const record = await prisma.shopConfig.findUnique({ where: { shop } });
-  if (!record) return DEFAULT_SHOP_CONFIG;
-  const stored = record.config as Partial<ShopConfigData>;
-  return {
-    ...DEFAULT_SHOP_CONFIG,
-    ...stored,
-    tiers: stored.tiers ?? DEFAULT_SHOP_CONFIG.tiers,
-    earningRules: stored.earningRules
-      ? { ...DEFAULT_SHOP_CONFIG.earningRules, ...(stored.earningRules as Partial<EarningRulesConfig>) }
-      : DEFAULT_SHOP_CONFIG.earningRules,
-    reviewSettings: stored.reviewSettings
-      ? { ...DEFAULT_SHOP_CONFIG.reviewSettings, ...(stored.reviewSettings as Partial<ReviewSettingsConfig>) }
-      : DEFAULT_SHOP_CONFIG.reviewSettings,
-  };
+export function getShopConfig(shop: string): Promise<ShopConfigData> {
+  // 120 s TTL — config changes only when an admin saves settings.
+  // invalidateLoyaltyCache(shop) is called by saveShopConfig to clear this.
+  return cached(`${shop}:config`, 120_000, async () => {
+    const record = await prisma.shopConfig.findUnique({ where: { shop } });
+    if (!record) return DEFAULT_SHOP_CONFIG;
+    const stored = record.config as Partial<ShopConfigData>;
+    return {
+      ...DEFAULT_SHOP_CONFIG,
+      ...stored,
+      tiers: stored.tiers ?? DEFAULT_SHOP_CONFIG.tiers,
+      earningRules: stored.earningRules
+        ? { ...DEFAULT_SHOP_CONFIG.earningRules, ...(stored.earningRules as Partial<EarningRulesConfig>) }
+        : DEFAULT_SHOP_CONFIG.earningRules,
+      reviewSettings: stored.reviewSettings
+        ? { ...DEFAULT_SHOP_CONFIG.reviewSettings, ...(stored.reviewSettings as Partial<ReviewSettingsConfig>) }
+        : DEFAULT_SHOP_CONFIG.reviewSettings,
+    };
+  });
 }
 
 type ShopConfigPatch = Partial<Omit<ShopConfigData, "earningRules" | "reviewSettings">> & {
@@ -152,6 +176,8 @@ export async function saveShopConfig(shop: string, patch: ShopConfigPatch): Prom
     create: { shop, config: JSON.parse(JSON.stringify(merged)) },
     update: { config: JSON.parse(JSON.stringify(merged)) },
   });
+  // Bust the config cache so the next request reads the new value.
+  cache.delete(`${shop}:config`);
 }
 
 // ─── Tier helpers ─────────────────────────────────────────────────────────────
@@ -399,32 +425,36 @@ export async function expireStalePoints(shop: string): Promise<number> {
 
 // ─── Admin: overview stats ────────────────────────────────────────────────────
 
-export async function getOverviewStats(shop: string) {
-  const soon = new Date();
-  soon.setDate(soon.getDate() + 30);
+export function getOverviewStats(shop: string) {
+  // 60 s TTL — member counts and point totals are aggregate stats,
+  // not transactional data. A 1-minute lag is acceptable on an admin dashboard.
+  return cached(`${shop}:overview`, 60_000, async () => {
+    const soon = new Date();
+    soon.setDate(soon.getDate() + 30);
 
-  const [totalMembers, pointsAgg, activeRewardsCount, expiringCount] = await Promise.all([
-    prisma.customer.count({ where: { shop } }),
-    prisma.transaction.aggregate({
-      where: { customer: { shop }, type: "earn" },
-      _sum: { points: true },
-    }),
-    prisma.reward.count({ where: { shop, isActive: true } }),
-    prisma.customer.count({
-      where: {
-        shop,
-        pointsBalance: { gt: 0 },
-        pointsExpiresAt: { not: null, lt: soon },
-      },
-    }),
-  ]);
+    const [totalMembers, pointsAgg, activeRewardsCount, expiringCount] = await Promise.all([
+      prisma.customer.count({ where: { shop } }),
+      prisma.transaction.aggregate({
+        where: { customer: { shop }, type: "earn" },
+        _sum: { points: true },
+      }),
+      prisma.reward.count({ where: { shop, isActive: true } }),
+      prisma.customer.count({
+        where: {
+          shop,
+          pointsBalance: { gt: 0 },
+          pointsExpiresAt: { not: null, lt: soon },
+        },
+      }),
+    ]);
 
-  return {
-    totalMembers,
-    totalPointsIssued: pointsAgg._sum.points ?? 0,
-    activeRewardsCount,
-    expiringIn30Days: expiringCount,
-  };
+    return {
+      totalMembers,
+      totalPointsIssued: pointsAgg._sum.points ?? 0,
+      activeRewardsCount,
+      expiringIn30Days: expiringCount,
+    };
+  });
 }
 
 // ─── Admin: tier member counts ────────────────────────────────────────────────
@@ -436,6 +466,40 @@ export async function getTierCounts(shop: string): Promise<Record<string, number
     _count: { id: true },
   });
   return Object.fromEntries(rows.map((r) => [r.tier, r._count.id]));
+}
+
+// ─── Admin: dashboard supplemental stats (cached) ────────────────────────────
+// These three queries are only used by the dashboard loader. Grouping them here
+// lets us cache them alongside the other loyalty stats.
+
+export function getDashboardExtras(shop: string) {
+  return cached(`${shop}:dash-extras`, 60_000, async () => {
+    const [balanceAgg, redemptionCount, recentTransactions] = await Promise.all([
+      prisma.customer.aggregate({ where: { shop }, _sum: { pointsBalance: true } }),
+      prisma.redemption.count({ where: { customer: { shop } } }),
+      prisma.transaction.findMany({
+        where: { customer: { shop }, type: "earn" },
+        orderBy: { createdAt: "desc" },
+        take: 5,
+        include: { customer: { select: { email: true, firstName: true, lastName: true } } },
+      }),
+    ]);
+    return {
+      totalPointsInCirculation: balanceAgg._sum.pointsBalance ?? 0,
+      redemptionCount,
+      recentTransactions: recentTransactions.map((t) => {
+        const name = t.customer
+          ? [t.customer.firstName, t.customer.lastName].filter(Boolean).join(" ") || t.customer.email
+          : "Unknown";
+        return {
+          id: t.id,
+          label: `${name} — ${t.points.toLocaleString()} pts`,
+          meta: t.description ?? "Earn event",
+          time: t.createdAt.toISOString(),
+        };
+      }),
+    };
+  });
 }
 
 // ─── Admin: member list ───────────────────────────────────────────────────────

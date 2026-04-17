@@ -52,7 +52,8 @@ const limitArg = process.argv.find((a) => a.startsWith("--limit="))?.split("=")[
       : null);
 const ROW_LIMIT = limitArg ? parseInt(limitArg, 10) : Infinity;
 
-const prisma = new PrismaClient({ log: [] });
+// Use DIRECT_URL for scripts — bypasses PgBouncer which has connection_limit=1
+const prisma = new PrismaClient({ log: [], datasources: { db: { url: process.env.DIRECT_URL } } });
 
 // ─── Retry wrapper ────────────────────────────────────────────────────────────
 

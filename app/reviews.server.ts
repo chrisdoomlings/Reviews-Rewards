@@ -1,5 +1,29 @@
+import { Prisma } from "@prisma/client";
 import prisma from "./db.server";
 import { awardPointsForReview } from "./loyalty.server";
+
+// ─── Simple in-process cache for expensive aggregate queries ──────────────────
+// Stats (pending count, flagged count, rating distribution) don't need to be
+// exact on every request. A 30-second TTL eliminates the COUNT(*) overhead
+// for the vast majority of page loads at scale.
+
+interface CacheEntry<T> { value: T; expiresAt: number }
+const cache = new Map<string, CacheEntry<unknown>>();
+
+function cached<T>(key: string, ttlMs: number, fn: () => Promise<T>): Promise<T> {
+  const hit = cache.get(key) as CacheEntry<T> | undefined;
+  if (hit && hit.expiresAt > Date.now()) return Promise.resolve(hit.value);
+  return fn().then((value) => {
+    cache.set(key, { value, expiresAt: Date.now() + ttlMs });
+    return value;
+  });
+}
+
+export function invalidateReviewCache(shop: string) {
+  for (const key of cache.keys()) {
+    if (key.startsWith(shop)) cache.delete(key);
+  }
+}
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -24,59 +48,67 @@ export interface ReviewRow {
 }
 
 // ─── Stats ────────────────────────────────────────────────────────────────────
+// Cached 30 s — COUNT(*) at 10M rows is expensive; pending/flagged counts
+// don't need to be exact to the millisecond for a moderation dashboard.
 
-export async function getReviewStats(shop: string) {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+export function getReviewStats(shop: string) {
+  return cached(`${shop}:stats`, 30_000, async () => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
 
-  const [pending, flagged, approvedToday, ratingAgg] = await Promise.all([
-    prisma.review.count({ where: { shop, status: "pending" } }),
-    prisma.review.count({
-      where: { shop, flagged: true, status: { notIn: ["approved", "rejected"] } },
-    }),
-    prisma.review.count({ where: { shop, status: "approved", updatedAt: { gte: today } } }),
-    prisma.review.aggregate({
-      where: { shop, status: "approved" },
-      _avg: { rating: true },
-    }),
-  ]);
+    const [pending, flagged, approvedToday, ratingAgg] = await Promise.all([
+      prisma.review.count({ where: { shop, status: "pending" } }),
+      prisma.review.count({
+        where: { shop, flagged: true, status: { notIn: ["approved", "rejected"] } },
+      }),
+      prisma.review.count({ where: { shop, status: "approved", updatedAt: { gte: today } } }),
+      prisma.review.aggregate({
+        where: { shop, status: "approved" },
+        _avg: { rating: true },
+      }),
+    ]);
 
-  return {
-    pending,
-    flagged,
-    approvedToday,
-    avgRating: ratingAgg._avg.rating ? Number(ratingAgg._avg.rating.toFixed(1)) : 0,
-  };
+    return {
+      pending,
+      flagged,
+      approvedToday,
+      avgRating: ratingAgg._avg.rating ? Number(ratingAgg._avg.rating.toFixed(1)) : 0,
+    };
+  });
 }
 
 // ─── Star rating distribution ────────────────────────────────────────────────
+// Cached 60 s — distribution barely changes between page loads.
 
-export async function getRatingCounts(shop: string): Promise<Record<number, number>> {
-  const rows = await prisma.review.groupBy({
-    by: ["rating"],
-    where: { shop },
-    _count: true,
+export function getRatingCounts(shop: string): Promise<Record<number, number>> {
+  return cached(`${shop}:ratingCounts`, 60_000, async () => {
+    const rows = await prisma.review.groupBy({
+      by: ["rating"],
+      where: { shop },
+      _count: true,
+    });
+    const out: Record<number, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+    for (const r of rows) out[r.rating] = r._count;
+    return out;
   });
-  const out: Record<number, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
-  for (const r of rows) out[r.rating] = r._count;
-  return out;
 }
 
 // ─── Paginated review list ────────────────────────────────────────────────────
+//
+// Uses cursor-based (keyset) pagination instead of OFFSET.
+// At 10 M rows, OFFSET n forces Postgres to scan & discard n rows before
+// returning 25. With a cursor Postgres seeks directly to the right position
+// via the covering index, making every page equally fast.
+//
+// Cursor = the `id` of the last row on the previous page (CUIDs sort stably
+// within the same createdAt second because we add `id DESC` as a tiebreaker).
 
 const PAGE_SIZE = 25;
 
-export async function getReviewsPage(
-  shop: string,
-  {
-    status = "all",
-    page = 1,
-    search = "",
-    rating,
-    type,
-  }: { status?: string; page?: number; search?: string; rating?: number; type?: string },
-) {
-  // Build where clause
+function buildWhere(shop: string, opts: {
+  status?: string; search?: string; rating?: number; type?: string;
+}) {
+  const { status = "all", search = "", rating, type } = opts;
   const conditions: object[] = [{ shop }];
 
   if (status === "flagged") {
@@ -100,15 +132,31 @@ export async function getReviewsPage(
     });
   }
 
-  const where = conditions.length === 1 ? conditions[0] : { AND: conditions };
+  return conditions.length === 1 ? conditions[0] : { AND: conditions };
+}
+
+export async function getReviewsPage(
+  shop: string,
+  {
+    status = "all",
+    cursor,
+    search = "",
+    rating,
+    type,
+  }: { status?: string; cursor?: string; search?: string; rating?: number; type?: string },
+) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const where = buildWhere(shop, { status, search, rating, type }) as any;
 
   const [rows, total] = await Promise.all([
     prisma.review.findMany({
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      where: where as any,
-      orderBy: { createdAt: "desc" },
-      skip: (page - 1) * PAGE_SIZE,
-      take: PAGE_SIZE,
+      where,
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      // Take one extra row to detect whether there's a next page.
+      take: PAGE_SIZE + 1,
+      // Cursor seek: skip the cursor row itself (it was the last item on the
+      // previous page) and start from the row that follows it in sort order.
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
       include: {
         customer: { select: { email: true, firstName: true, lastName: true, shop: true } },
         photos: { select: { id: true, url: true } },
@@ -117,14 +165,17 @@ export async function getReviewsPage(
         },
       },
     }),
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    prisma.review.count({ where: where as any }),
+    prisma.review.count({ where }),
   ]);
+
+  const hasMore = rows.length > PAGE_SIZE;
+  const items   = hasMore ? rows.slice(0, PAGE_SIZE) : rows;
+  const nextCursor = hasMore ? items[items.length - 1].id : null;
 
   const r2Base = process.env.R2_PUBLIC_URL ?? "";
 
   return {
-    reviews: rows.map((r): ReviewRow => ({
+    reviews: items.map((r): ReviewRow => ({
       id: r.id,
       shopifyProductId: r.shopifyProductId,
       shopifyOrderId: r.shopifyOrderId,
@@ -151,7 +202,8 @@ export async function getReviewsPage(
       })),
     })),
     total,
-    page,
+    nextCursor,
+    hasMore,
     pageSize: PAGE_SIZE,
   };
 }
@@ -204,4 +256,75 @@ export async function rejectVideo(videoId: string): Promise<void> {
 
 export async function flagReview(reviewId: string): Promise<void> {
   await prisma.review.update({ where: { id: reviewId }, data: { flagged: true } });
+}
+
+// ─── Analytics ────────────────────────────────────────────────────────────────
+
+export async function getAnalytics(
+  shop: string,
+  { days = 30, type = "all" }: { days?: number; type?: string },
+) {
+  const now      = new Date();
+  const from     = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
+  const prevFrom = new Date(from.getTime() - days * 24 * 60 * 60 * 1000);
+
+  const typeFilter =
+    type === "product" ? { shopifyProductId: { not: "site" } } :
+    type === "site"    ? { shopifyProductId: "site" } :
+    {};
+
+  const base     = { shop, ...typeFilter };
+  const basePrev = { ...base, createdAt: { gte: prevFrom, lt: from } };
+  const baseCur  = { ...base, createdAt: { gte: from } };
+
+  const typeClause =
+    type === "product" ? Prisma.sql`AND "shopifyProductId" != 'site'` :
+    type === "site"    ? Prisma.sql`AND "shopifyProductId" = 'site'` :
+    Prisma.sql``;
+
+  const [
+    totalReviews,
+    avgAgg,
+    newInPeriod,
+    newInPrev,
+    ratingRows,
+    statusRows,
+    timeSeries,
+  ] = await Promise.all([
+    prisma.review.count({ where: base }),
+    prisma.review.aggregate({ where: { ...base, status: "approved" }, _avg: { rating: true } }),
+    prisma.review.count({ where: baseCur }),
+    prisma.review.count({ where: basePrev }),
+    prisma.review.groupBy({ by: ["rating"], where: base, _count: true }),
+    prisma.review.groupBy({ by: ["status"], where: base, _count: true }),
+    prisma.$queryRaw<{ day: string; count: number }[]>`
+      SELECT TO_CHAR(DATE_TRUNC('day', "createdAt"), 'YYYY-MM-DD') as day,
+             COUNT(*)::int as count
+      FROM "Review"
+      WHERE shop = ${shop} AND "createdAt" >= ${from}
+      ${typeClause}
+      GROUP BY day ORDER BY day ASC
+    `,
+  ]);
+
+  const avgRating  = avgAgg._avg.rating ? Number(avgAgg._avg.rating.toFixed(1)) : 0;
+  const periodPct  = newInPrev > 0
+    ? Math.round(((newInPeriod - newInPrev) / newInPrev) * 100)
+    : newInPeriod > 0 ? 100 : 0;
+
+  const ratingDist: Record<number, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+  for (const r of ratingRows) ratingDist[r.rating] = r._count;
+
+  const statusDist: Record<string, number> = { approved: 0, pending: 0, rejected: 0, flagged: 0 };
+  for (const r of statusRows) statusDist[r.status] = r._count;
+
+  return {
+    totalReviews,
+    avgRating,
+    newInPeriod,
+    periodPct,
+    ratingDist,
+    statusDist,
+    timeSeries: timeSeries.map((r) => ({ day: r.day, count: Number(r.count) })),
+  };
 }
