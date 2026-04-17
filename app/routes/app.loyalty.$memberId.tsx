@@ -1,5 +1,5 @@
 import type { ActionFunctionArgs, HeadersFunction, LoaderFunctionArgs } from "react-router";
-import { Link, useFetcher, useLoaderData, useNavigate } from "react-router";
+import { useFetcher, useLoaderData } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
 import { getMemberDetail, adjustPoints, invalidateLoyaltyCache } from "../loyalty.server";
@@ -96,7 +96,6 @@ const td    = { padding: "12px", fontSize: "13px" };
 export default function MemberDetail() {
   const { member } = useLoaderData<typeof loader>();
   const fetcher = useFetcher<{ ok?: boolean; error?: string }>();
-  const navigate = useNavigate();
   const submitting = fetcher.state !== "idle";
 
   const name = [member.firstName, member.lastName].filter(Boolean).join(" ") || member.email;
