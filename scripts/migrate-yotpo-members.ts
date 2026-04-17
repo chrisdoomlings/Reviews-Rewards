@@ -1,26 +1,25 @@
 /**
  * Yotpo → Doomlings loyalty member migration
  *
- * Reads points.csv (Yotpo export) and upserts Customer + import Transaction
- * records into the database. Safe to re-run — all operations are idempotent.
+ * Reads points.csv and upserts Customer + import Transaction records.
+ * Safe to re-run — all operations are idempotent.
  *
  * Usage:
  *   npx tsx scripts/migrate-yotpo-members.ts               # live run
  *   npx tsx scripts/migrate-yotpo-members.ts --dry-run     # preview only
- *   npx tsx scripts/migrate-yotpo-members.ts --only-balances # skip zero-balance rows
- *   npx tsx scripts/migrate-yotpo-members.ts --limit 500   # test with first 500 rows
+ *   npx tsx scripts/migrate-yotpo-members.ts --only-balances
+ *   npx tsx scripts/migrate-yotpo-members.ts --limit 500
  *
- * After running:
- *   - Customers get shopifyCustomerId = "yotpo_<email>" as a placeholder.
- *   - The first time a customer logs in via OTC, auth.server.ts should update
- *     shopifyCustomerId to the real Shopify customer ID (matched by shop + email).
+ * Performance: ~3 DB queries per 250-row batch (not per row).
+ * Retry: up to 4 attempts with backoff on connection errors.
  */
 
 import { createReadStream } from "fs";
 import { join }             from "path";
 import { parse }            from "csv-parse";
 import { readFileSync }     from "fs";
-import { PrismaClient }     from "@prisma/client";
+import { randomUUID }       from "crypto";
+import { PrismaClient, Prisma } from "@prisma/client";
 
 // ─── Load .env ────────────────────────────────────────────────────────────────
 
@@ -43,19 +42,38 @@ const ONLY_BALANCES = process.argv.includes("--only-balances");
 const SHOP          = process.env.SHOPIFY_SHOP ?? "doomlings.myshopify.com";
 const CSV_PATH      = join(process.cwd(), "points.csv");
 const EXPIRY_MONTHS = 12;
+const BATCH_SIZE    = 250;
+const MAX_RETRIES   = 4;
+const RETRY_DELAY   = 3000; // ms — doubles each attempt
 
-// How many rows to upsert in one DB round-trip.
-// Kept low to stay well within Supabase's PgBouncer connection pool limit.
-const BATCH_SIZE = 50;
-
-// Hard row cap for testing. Pass --limit 500 to trial on a small slice first.
 const limitArg = process.argv.find((a) => a.startsWith("--limit="))?.split("=")[1]
   ?? (process.argv.indexOf("--limit") !== -1
       ? process.argv[process.argv.indexOf("--limit") + 1]
       : null);
 const ROW_LIMIT = limitArg ? parseInt(limitArg, 10) : Infinity;
 
-const prisma = new PrismaClient();
+const prisma = new PrismaClient({ log: [] });
+
+// ─── Retry wrapper ────────────────────────────────────────────────────────────
+
+const RETRYABLE = ["P1001", "P1008", "P1017", "P2024"];
+
+async function withRetry<T>(fn: () => Promise<T>, label = ""): Promise<T> {
+  let delay = RETRY_DELAY;
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      return await fn();
+    } catch (err: any) {
+      const code = err?.code ?? "";
+      const isRetryable = RETRYABLE.includes(code) || err?.message?.includes("Can't reach");
+      if (!isRetryable || attempt === MAX_RETRIES) throw err;
+      console.log(`  [retry ${attempt}/${MAX_RETRIES - 1}] ${label} — waiting ${delay / 1000}s…`);
+      await new Promise((r) => setTimeout(r, delay));
+      delay *= 2;
+    }
+  }
+  throw new Error("unreachable");
+}
 
 // ─── Tier normalisation ───────────────────────────────────────────────────────
 
@@ -63,9 +81,8 @@ const TIER_MAP: Record<string, string> = {
   prepper:  "prepper",
   survivor: "survivor",
   ruler:    "ruler",
-  none:     "prepper",   // no tier assigned → base tier
+  none:     "prepper",
 };
-
 function normaliseTier(raw: string): string {
   return TIER_MAP[raw.toLowerCase().trim()] ?? "prepper";
 }
@@ -73,110 +90,167 @@ function normaliseTier(raw: string): string {
 // ─── Date helpers ─────────────────────────────────────────────────────────────
 
 function parseUtcDate(raw: string): Date | null {
-  if (!raw || raw.trim() === "" || raw.trim().toLowerCase() === "unknown") return null;
+  if (!raw || raw.trim().toLowerCase() === "unknown") return null;
   const d = new Date(raw.trim().replace(" UTC", "Z"));
   return isNaN(d.getTime()) ? null : d;
 }
-
 function expiryDate(lastSeen: Date | null): Date {
-  const base = lastSeen ?? new Date();
-  const d    = new Date(base);
+  const d = new Date(lastSeen ?? new Date());
   d.setMonth(d.getMonth() + EXPIRY_MONTHS);
   return d;
 }
 
-// ─── CSV row type ─────────────────────────────────────────────────────────────
+// ─── Parsed row ───────────────────────────────────────────────────────────────
 
-interface YotpoRow {
-  email:                       string;
-  first_name:                  string;
-  last_name:                   string;
-  points_earned:               string;
-  points_balance:              string;
-  last_seen:                   string;
-  vip_tier:                    string;
-  loyalty_eligible:            string;
-  platform_account_created_at: string;
-  created_at:                  string;
+interface ParsedRow {
+  email:          string;
+  firstName:      string | null;
+  lastName:       string | null;
+  pointsBalance:  number;
+  pointsEarned:   number;
+  tier:           string;
+  pointsExpiresAt: Date;
+  createdAt:      Date;
+}
+
+function parseRow(raw: Record<string, string>): ParsedRow | null {
+  const email = raw.email?.trim().toLowerCase();
+  if (!email || !email.includes("@")) return null;
+  if (raw.loyalty_eligible?.trim().toLowerCase() === "false") return null;
+
+  const pointsBalance = Math.max(0, parseInt(raw.points_balance, 10) || 0);
+  if (ONLY_BALANCES && pointsBalance === 0) return null;
+
+  return {
+    email,
+    firstName:       raw.first_name || null,
+    lastName:        raw.last_name  || null,
+    pointsBalance,
+    pointsEarned:    Math.max(0, parseInt(raw.points_earned, 10) || 0),
+    tier:            normaliseTier(raw.vip_tier ?? ""),
+    pointsExpiresAt: expiryDate(parseUtcDate(raw.last_seen)),
+    createdAt:       parseUtcDate(raw.created_at) ?? new Date(),
+  };
 }
 
 // ─── Counters ─────────────────────────────────────────────────────────────────
 
 const stats = { total: 0, imported: 0, zeroBalance: 0, skipped: 0, errors: 0 };
 
-// ─── Process one batch (sequential upserts — safe for connection pool) ────────
+// ─── Process one batch ────────────────────────────────────────────────────────
+// 3 DB round-trips per batch regardless of batch size:
+//   1. Batch upsert customers (raw SQL — INSERT … ON CONFLICT DO UPDATE … RETURNING)
+//   2. Find existing Yotpo import transactions for this batch
+//   3. createMany new transactions
 
-async function processBatch(rows: YotpoRow[]) {
-  for (const row of rows) {
-    const email         = row.email.toLowerCase().trim();
-    const pointsBalance = Math.max(0, parseInt(row.points_balance, 10) || 0);
-    const pointsEarned  = Math.max(0, parseInt(row.points_earned,  10) || 0);
-    const tier          = normaliseTier(row.vip_tier);
-    const lastSeen      = parseUtcDate(row.last_seen);
-    const createdAt     = parseUtcDate(row.created_at) ?? new Date();
-    const pointsExpiresAt = expiryDate(lastSeen);
+async function processBatch(rows: ParsedRow[]) {
+  if (rows.length === 0) return;
 
-    if (DRY_RUN) {
-      pointsBalance > 0 ? stats.imported++ : stats.zeroBalance++;
-      continue;
-    }
+  if (DRY_RUN) {
+    rows.forEach((r) => (r.pointsBalance > 0 ? stats.imported++ : stats.zeroBalance++));
+    return;
+  }
 
+  const now = new Date();
+
+  // 1. Batch upsert customers ─────────────────────────────────────────────────
+  let upserted: { id: string; email: string }[] = [];
+  try {
+    upserted = await withRetry(
+      () =>
+        prisma.$queryRaw<{ id: string; email: string }[]>`
+          INSERT INTO "Customer" (
+            "id", "shopifyCustomerId", "shop", "email",
+            "firstName", "lastName", "pointsBalance", "tier",
+            "pointsExpiresAt", "createdAt", "updatedAt"
+          )
+          VALUES ${Prisma.join(
+            rows.map((r) =>
+              Prisma.sql`(
+                ${randomUUID()},
+                ${"yotpo_" + r.email},
+                ${SHOP},
+                ${r.email},
+                ${r.firstName},
+                ${r.lastName},
+                ${r.pointsBalance},
+                ${r.tier},
+                ${r.pointsExpiresAt},
+                ${r.createdAt},
+                ${now}
+              )`
+            )
+          )}
+          ON CONFLICT ("shop", "email") DO UPDATE SET
+            "firstName"       = EXCLUDED."firstName",
+            "lastName"        = EXCLUDED."lastName",
+            "pointsBalance"   = EXCLUDED."pointsBalance",
+            "tier"            = EXCLUDED."tier",
+            "pointsExpiresAt" = EXCLUDED."pointsExpiresAt",
+            "updatedAt"       = EXCLUDED."updatedAt"
+          RETURNING "id", "email"
+        `,
+      "customer upsert"
+    );
+  } catch (err: any) {
+    stats.errors += rows.length;
+    console.error(`  Batch upsert failed: ${err?.message ?? err}`);
+    return;
+  }
+
+  const emailToId = new Map(upserted.map((c) => [c.email, c.id]));
+
+  // 2+3. Transactions for rows with balance ───────────────────────────────────
+  const withBalance = rows.filter((r) => r.pointsBalance > 0);
+  const withBalanceIds = withBalance
+    .map((r) => emailToId.get(r.email))
+    .filter((id): id is string => Boolean(id));
+
+  if (withBalanceIds.length > 0) {
     try {
-      // Upsert the customer. On conflict (shop + email) we update loyalty fields
-      // but intentionally leave shopifyCustomerId alone — it may already be a real
-      // Shopify ID from a prior login.
-      const customer = await prisma.customer.upsert({
-        where:  { shop_email: { shop: SHOP, email } },
-        create: {
-          shopifyCustomerId: `yotpo_${email}`,
-          shop:              SHOP,
-          email,
-          firstName:         row.first_name  || null,
-          lastName:          row.last_name   || null,
-          pointsBalance,
-          tier,
-          pointsExpiresAt,
-          createdAt,
-        },
-        update: {
-          firstName:         row.first_name  || null,
-          lastName:          row.last_name   || null,
-          pointsBalance,
-          tier,
-          pointsExpiresAt,
-        },
-        select: { id: true },
-      });
-
-      // Create the import transaction only if there's a balance and it's not
-      // already there (re-run safety).
-      if (pointsBalance > 0) {
-        const alreadyImported = await prisma.transaction.findFirst({
-          where: { customerId: customer.id, description: { startsWith: "Yotpo import" } },
-          select: { id: true },
-        });
-
-        if (!alreadyImported) {
-          await prisma.transaction.create({
-            data: {
-              customerId:  customer.id,
-              type:        "earn",
-              points:      pointsBalance,
-              description: `Yotpo import — ${pointsEarned.toLocaleString()} pts lifetime earned`,
-              createdAt,
+      // Check which customers already have a Yotpo import transaction
+      const existing = await withRetry(
+        () =>
+          prisma.transaction.findMany({
+            where: {
+              customerId:  { in: withBalanceIds },
+              description: { startsWith: "Yotpo import" },
             },
-          });
-        }
+            select: { customerId: true },
+          }),
+        "check existing txns"
+      );
+      const alreadyImported = new Set(existing.map((t) => t.customerId));
 
-        stats.imported++;
-      } else {
-        stats.zeroBalance++;
+      const newTxns = withBalance
+        .map((r) => {
+          const customerId = emailToId.get(r.email);
+          if (!customerId || alreadyImported.has(customerId)) return null;
+          return {
+            customerId,
+            type:        "earn",
+            points:      r.pointsBalance,
+            description: `Yotpo import — ${r.pointsEarned.toLocaleString()} pts lifetime earned`,
+            createdAt:   r.createdAt,
+          };
+        })
+        .filter((t): t is NonNullable<typeof t> => t !== null);
+
+      if (newTxns.length > 0) {
+        await withRetry(
+          () => prisma.transaction.createMany({ data: newTxns }),
+          "create txns"
+        );
       }
     } catch (err: any) {
-      stats.errors++;
-      console.error(`  Error [${email}]: ${err?.message ?? err}`);
+      console.error(`  Transaction batch failed: ${err?.message ?? err}`);
+      // Customers were upserted successfully — only transactions failed.
+      // Non-fatal: re-running the script will fill in the missing transactions.
     }
   }
+
+  stats.imported    += withBalance.length;
+  stats.zeroBalance += rows.length - withBalance.length;
 }
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
@@ -185,72 +259,66 @@ async function main() {
   console.log("\nYotpo member migration");
   console.log(`  CSV        : ${CSV_PATH}`);
   console.log(`  Shop       : ${SHOP}`);
-  console.log(`  Batch size : ${BATCH_SIZE}`);
+  console.log(`  Batch size : ${BATCH_SIZE} rows → ~3 DB queries/batch`);
+  console.log(`  Retries    : up to ${MAX_RETRIES} attempts per batch`);
   console.log(`  Mode       : ${DRY_RUN ? "DRY RUN (no writes)" : "LIVE"}`);
   if (ONLY_BALANCES) console.log(`  Filter     : only members with points_balance > 0`);
   if (ROW_LIMIT !== Infinity) console.log(`  Limit      : first ${ROW_LIMIT.toLocaleString()} rows`);
   console.log("");
 
-  const startTime = Date.now();
-  let batch: YotpoRow[] = [];
+  // Verify connection before streaming 130k rows
+  if (!DRY_RUN) {
+    process.stdout.write("  Checking DB connection… ");
+    try {
+      await withRetry(() => prisma.$queryRaw`SELECT 1`, "ping");
+      console.log("OK\n");
+    } catch {
+      console.log("FAILED\n");
+      console.error("  Cannot reach the database. Check Supabase dashboard and try again.");
+      process.exit(1);
+    }
+  }
 
-  // ── Async iterator — safe with await, no double-fire risk ──────────────────
+  const startTime = Date.now();
+  let batch: ParsedRow[] = [];
+
   const parser = createReadStream(CSV_PATH).pipe(
     parse({
       columns:            true,
       skip_empty_lines:   true,
       trim:               true,
-      relax_column_count: true,   // tolerate rows where commas in names shift columns
+      relax_column_count: true,
     })
   );
 
-  for await (const record of parser as AsyncIterable<YotpoRow>) {
+  for await (const raw of parser as AsyncIterable<Record<string, string>>) {
     stats.total++;
-
     if (stats.total > ROW_LIMIT) break;
 
-    const email   = record.email?.trim().toLowerCase() ?? "";
-    const balance = parseInt(record.points_balance, 10) || 0;
+    const row = parseRow(raw);
+    if (!row) { stats.skipped++; continue; }
 
-    // Skip invalid / ineligible rows
-    if (!email || !email.includes("@")) {
-      stats.skipped++;
-      continue;
-    }
-    if (record.loyalty_eligible?.trim().toLowerCase() === "false") {
-      stats.skipped++;
-      continue;
-    }
-    if (ONLY_BALANCES && balance === 0) {
-      stats.skipped++;
-      continue;
-    }
-
-    batch.push(record);
+    batch.push(row);
 
     if (batch.length >= BATCH_SIZE) {
       await processBatch(batch);
       batch = [];
 
-      // Progress line every ~5 000 rows
-      if (stats.total % 5000 < BATCH_SIZE) {
+      if ((stats.imported + stats.zeroBalance) % 5000 < BATCH_SIZE) {
         const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-        const done    = stats.imported + stats.zeroBalance;
-        const pct     = ROW_LIMIT !== Infinity
-          ? ` (${Math.round((stats.total / ROW_LIMIT) * 100)}%)`
-          : "";
+        const pct     = ROW_LIMIT !== Infinity ? ` (${Math.round((stats.total / ROW_LIMIT) * 100)}%)` : "";
         console.log(
           `  [${elapsed}s] ${stats.total.toLocaleString()} rows${pct} — ` +
-          `done: ${done.toLocaleString()}, skipped: ${stats.skipped}, errors: ${stats.errors}`
+          `with balance: ${stats.imported.toLocaleString()}, ` +
+          `zero: ${stats.zeroBalance.toLocaleString()}, ` +
+          `errors: ${stats.errors}`
         );
       }
     }
   }
 
-  // Flush remaining rows
   if (batch.length > 0) await processBatch(batch);
 
-  // ── Summary ───────────────────────────────────────────────────────────────
   const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
   console.log(`\n${"─".repeat(52)}`);
   console.log(`Completed in ${elapsed}s`);
@@ -264,8 +332,5 @@ async function main() {
 }
 
 main()
-  .catch((err) => {
-    console.error(err);
-    process.exit(1);
-  })
+  .catch((err) => { console.error(err); process.exit(1); })
   .finally(() => prisma.$disconnect());
