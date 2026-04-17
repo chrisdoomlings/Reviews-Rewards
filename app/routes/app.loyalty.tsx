@@ -427,7 +427,9 @@ export default function Loyalty() {
                           <td style={{ ...styles.td, fontWeight: 700 }}>{m.pointsBalance.toLocaleString()}</td>
                           <td style={styles.td}>{m.reviewCount}</td>
                           <td style={{ ...styles.td, ...styles.muted }}>{lastActivity}</td>
-                          <td style={styles.td}><s-button>View</s-button></td>
+                          <td style={styles.td}>
+                            <s-button onClick={() => navigate(`/app/loyalty/${m.id}`)}>View</s-button>
+                          </td>
                         </tr>
                       );
                     })}
