@@ -260,9 +260,20 @@ export async function flagReview(reviewId: string): Promise<void> {
 
 // ─── Analytics ────────────────────────────────────────────────────────────────
 
+export async function getProductsWithReviews(shop: string) {
+  const rows = await prisma.review.groupBy({
+    by: ["shopifyProductId"],
+    where: { shop, shopifyProductId: { not: "site" } },
+    _count: true,
+    orderBy: { _count: { shopifyProductId: "desc" } },
+    take: 200,
+  });
+  return rows.map((r) => ({ productId: r.shopifyProductId, count: r._count }));
+}
+
 export async function getAnalytics(
   shop: string,
-  { days = 30, type = "all" }: { days?: number; type?: string },
+  { days = 30, type = "all", productId }: { days?: number; type?: string; productId?: string },
 ) {
   const now      = new Date();
   const from     = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
@@ -273,7 +284,9 @@ export async function getAnalytics(
     type === "site"    ? { shopifyProductId: "site" } :
     {};
 
-  const base     = { shop, ...typeFilter };
+  const productFilter = productId ? { shopifyProductId: productId } : {};
+
+  const base     = { shop, ...typeFilter, ...productFilter };
   const basePrev = { ...base, createdAt: { gte: prevFrom, lt: from } };
   const baseCur  = { ...base, createdAt: { gte: from } };
 
@@ -281,6 +294,10 @@ export async function getAnalytics(
     type === "product" ? Prisma.sql`AND "shopifyProductId" != 'site'` :
     type === "site"    ? Prisma.sql`AND "shopifyProductId" = 'site'` :
     Prisma.sql``;
+
+  const productClause = productId
+    ? Prisma.sql`AND "shopifyProductId" = ${productId}`
+    : Prisma.sql``;
 
   const [
     totalReviews,
@@ -303,6 +320,7 @@ export async function getAnalytics(
       FROM "Review"
       WHERE shop = ${shop} AND "createdAt" >= ${from}
       ${typeClause}
+      ${productClause}
       GROUP BY day ORDER BY day ASC
     `,
   ]);

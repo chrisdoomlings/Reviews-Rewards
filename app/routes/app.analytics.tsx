@@ -7,18 +7,23 @@ import {
 } from "recharts";
 
 import { authenticate } from "../shopify.server";
-import { getAnalytics } from "../reviews.server";
+import { getAnalytics, getProductsWithReviews } from "../reviews.server";
 
 // ─── Loader ───────────────────────────────────────────────────────────────────
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
-  const url  = new URL(request.url);
-  const days = parseInt(url.searchParams.get("days") ?? "30") || 30;
-  const type = url.searchParams.get("type") ?? "all";
+  const url       = new URL(request.url);
+  const days      = parseInt(url.searchParams.get("days") ?? "30") || 30;
+  const type      = url.searchParams.get("type") ?? "all";
+  const productId = url.searchParams.get("product") ?? undefined;
 
-  const data = await getAnalytics(session.shop, { days, type });
-  return { ...data, days, type };
+  const [data, products] = await Promise.all([
+    getAnalytics(session.shop, { days, type, productId }),
+    getProductsWithReviews(session.shop),
+  ]);
+
+  return { ...data, days, type, productId: productId ?? null, products };
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -111,7 +116,7 @@ export default function Analytics() {
   const data           = useLoaderData<typeof loader>();
   const navigate       = useNavigate();
   const [params]       = useSearchParams();
-  const { days, type } = data;
+  const { days, type, productId, products } = data;
 
   function nav(updates: Record<string, string | number>) {
     const p = new URLSearchParams(params);
@@ -197,7 +202,12 @@ export default function Analytics() {
             {TYPE_OPTIONS.map((opt) => (
               <button
                 key={opt.value}
-                onClick={() => nav({ type: opt.value })}
+                onClick={() => {
+                  const p = new URLSearchParams(params);
+                  p.set("type", opt.value);
+                  if (opt.value === "site") p.delete("product");
+                  navigate(`?${p.toString()}`);
+                }}
                 style={{
                   padding: "6px 14px",
                   border: "1px solid",
@@ -214,6 +224,41 @@ export default function Analytics() {
               </button>
             ))}
           </div>
+
+          {/* Product filter — hidden for site-only view */}
+          {type !== "site" && products.length > 0 && (
+            <>
+              <div style={{ width: "1px", height: "28px", background: "#e5e7eb" }} />
+              <select
+                value={productId ?? ""}
+                onChange={(e) => {
+                  const p = new URLSearchParams(params);
+                  if (e.target.value) p.set("product", e.target.value);
+                  else p.delete("product");
+                  navigate(`?${p.toString()}`);
+                }}
+                style={{
+                  padding: "6px 12px",
+                  border: "1px solid",
+                  borderRadius: "6px",
+                  fontSize: "12px",
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  borderColor: productId ? "#2563eb" : "#d1d5db",
+                  background: productId ? "#eff6ff" : "#fff",
+                  color: productId ? "#1d4ed8" : "#374151",
+                  maxWidth: "240px",
+                }}
+              >
+                <option value="">All Products</option>
+                {products.map((p) => (
+                  <option key={p.productId} value={p.productId}>
+                    {p.productId} ({fmt(p.count)})
+                  </option>
+                ))}
+              </select>
+            </>
+          )}
         </div>
       </s-section>
 
