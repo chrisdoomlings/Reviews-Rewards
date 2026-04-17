@@ -185,16 +185,17 @@ model ReviewVideo {
   @@index([status])
 }
 
-// ─── Email jobs — Klaviyo queue (NEW) ────────────────────────────────────────
+// ─── Email jobs — Resend scheduled queue ─────────────────────────────────────
 
 model EmailJob {
   id           String    @id @default(cuid())
   shop         String
-  type         String                           // "review_request" | "review_reminder" | "tier_upgrade" | "points_expiry" | "otc_login"
+  type         String                           // "review_request" | "review_reminder" | "tier_upgrade" | "points_expiry"
   customerId   String?
   scheduledFor DateTime
   sentAt       DateTime?
-  status       String    @default("pending")   // "pending" | "sent" | "failed" | "cancelled"
+  status       String    @default("scheduled") // "scheduled" | "sent" | "failed" | "cancelled"
+  resendId     String?                          // Resend email ID — used to cancel before send
   payload      Json
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
