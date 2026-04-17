@@ -30,6 +30,11 @@ scopes = "write_products,write_metaobjects,write_metaobject_definitions,write_di
 [auth]
 redirect_urls = [ "https://reviews-rewards.vercel.app/auth/callback" ]
 
+[app_proxy]
+url = "https://reviews-rewards.vercel.app/proxy/loyalty"
+subpath = "loyalty"
+prefix = "apps"
+
 [product.metafields.app.demo_info]
 type = "single_line_text_field"
 name = "Demo Source Info"

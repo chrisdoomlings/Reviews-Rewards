@@ -27,6 +27,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     expiringIn30Days:         loyaltyStats.expiringIn30Days,
     activeRewardsCount:       loyaltyStats.activeRewardsCount,
     redemptionCount:          extras.redemptionCount,
+    redeemingCustomers:       extras.redeemingCustomers,
+    tierCounts:               extras.tierCounts,
+    participationRate:        extras.participationRate,
     reviewStats,
     recentTransactions:       extras.recentTransactions,
   };
@@ -42,89 +45,45 @@ export function shouldRevalidate({ formMethod }: ShouldRevalidateFunctionArgs) {
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
-const statusTone: Record<string, { background: string; color: string }> = {
-  Ready:          { background: "#dff7e5", color: "#0a7d45" },
-  "In review":    { background: "#e8f2ff", color: "#005bd3" },
-  "Needs input":  { background: "#fff1d6", color: "#9a6700" },
-  "In progress":  { background: "#e8f2ff", color: "#005bd3" },
-  "Needs review": { background: "#fff1d6", color: "#9a6700" },
-  "On track":     { background: "#dff7e5", color: "#0a7d45" },
-  Blocked:        { background: "#fde8e8", color: "#b42318" },
-};
-
 const styles = {
-  metricCard: {
-    border: "1px solid #e1e3e5",
-    borderRadius: "12px",
-    padding: "16px",
-    background: "linear-gradient(180deg, #ffffff 0%, #f6f6f7 100%)",
-  } satisfies CSSProperties,
   muted: { color: "#5c5f62", fontSize: "13px", lineHeight: 1.5 } satisfies CSSProperties,
-  statusPill: (status: string): CSSProperties => ({
-    display: "inline-flex",
-    padding: "3px 10px",
-    borderRadius: "999px",
-    background: statusTone[status]?.background ?? "#eceeef",
-    color: statusTone[status]?.color ?? "#5c5f62",
-    fontSize: "12px",
-    fontWeight: 600,
-  }),
 };
 
-// ─── Editorial content (project-state, not DB data) ───────────────────────────
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function fmtK(n: number): string {
+  if (n >= 1000) {
+    const k = Math.round(n / 100) / 10;
+    return k + "k";
+  }
+  return String(n);
+}
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function Dashboard() {
   const d = useLoaderData<typeof loader>();
 
-  const programMetrics = [
-    {
-      label: "Total members",
-      value: d.totalMembers.toLocaleString(),
-      detail: `${d.expiringIn30Days.toLocaleString()} expiring in 30 days`,
-      tone: "#005bd3",
-    },
-    {
-      label: "Points in circulation",
-      value: d.totalPointsInCirculation.toLocaleString(),
-      detail: `${d.activeRewardsCount} reward${d.activeRewardsCount !== 1 ? "s" : ""} in catalog`,
-      tone: "#0a7d45",
-    },
-    {
-      label: "Redemptions",
-      value: d.redemptionCount.toLocaleString(),
-      detail: `${d.activeRewardsCount} active reward${d.activeRewardsCount !== 1 ? "s" : ""}`,
-      tone: "#9a6700",
-    },
-    {
-      label: "Pending reviews",
-      value: d.reviewStats.pending.toLocaleString(),
-      detail: `${d.reviewStats.flagged} flagged · avg ${d.reviewStats.avgRating || "—"} stars`,
-      tone: d.reviewStats.pending > 0 ? "#b42318" : "#0a7d45",
-    },
-  ];
+  const totalMembers = d.totalMembers;
+  const redeemPct = totalMembers > 0 ? Math.round((d.redeemingCustomers / totalMembers) * 100) : 0;
 
-  const moderationSummary = [
-    { label: "Approved today", value: d.reviewStats.approvedToday.toLocaleString() },
-    { label: "Flagged",        value: d.reviewStats.flagged.toLocaleString() },
-    { label: "Avg rating",     value: d.reviewStats.avgRating ? String(d.reviewStats.avgRating) : "—" },
-    { label: "Pending",        value: d.reviewStats.pending.toLocaleString() },
-  ];
+  // Tier order — base first, then ascending
+  const tierOrder = ["base", "bronze", "silver", "gold", "platinum", "diamond"];
+  const tierEntries = Object.entries(d.tierCounts).sort(
+    (a, b) => tierOrder.indexOf(a[0]) - tierOrder.indexOf(b[0])
+  );
+  const tierColors: Record<string, string> = {
+    base: "#9ca3af", bronze: "#b45309", silver: "#6b7280",
+    gold: "#d97706", platinum: "#7c3aed", diamond: "#0ea5e9",
+  };
 
   return (
     <s-page heading="Admin overview">
+      {/* ── Aside: needs attention ─────────────────────────────────── */}
       <s-section slot="aside" heading="Needs attention">
         <s-stack direction="block" gap="base">
           {d.reviewStats.flagged > 0 && (
-            <div
-              style={{
-                padding: "12px 14px",
-                borderRadius: "8px",
-                background: "#fde8e8",
-                border: "1px solid #b4231822",
-              }}
-            >
+            <div style={{ padding: "12px 14px", borderRadius: "8px", background: "#fde8e8", border: "1px solid #b4231822" }}>
               <div style={{ fontWeight: 700, fontSize: "13px", color: "#b42318", marginBottom: "2px" }}>
                 {d.reviewStats.flagged} flagged review{d.reviewStats.flagged !== 1 ? "s" : ""}
               </div>
@@ -132,14 +91,7 @@ export default function Dashboard() {
             </div>
           )}
           {d.reviewStats.pending > 0 && (
-            <div
-              style={{
-                padding: "12px 14px",
-                borderRadius: "8px",
-                background: "#fff1d6",
-                border: "1px solid #9a670022",
-              }}
-            >
+            <div style={{ padding: "12px 14px", borderRadius: "8px", background: "#fff1d6", border: "1px solid #9a670022" }}>
               <div style={{ fontWeight: 700, fontSize: "13px", color: "#9a6700", marginBottom: "2px" }}>
                 {d.reviewStats.pending} pending review{d.reviewStats.pending !== 1 ? "s" : ""}
               </div>
@@ -147,14 +99,7 @@ export default function Dashboard() {
             </div>
           )}
           {d.expiringIn30Days > 0 && (
-            <div
-              style={{
-                padding: "12px 14px",
-                borderRadius: "8px",
-                background: "#e8f2ff",
-                border: "1px solid #005bd322",
-              }}
-            >
+            <div style={{ padding: "12px 14px", borderRadius: "8px", background: "#e8f2ff", border: "1px solid #005bd322" }}>
               <div style={{ fontWeight: 700, fontSize: "13px", color: "#005bd3", marginBottom: "2px" }}>
                 {d.expiringIn30Days} member{d.expiringIn30Days !== 1 ? "s" : ""} expiring
               </div>
@@ -162,9 +107,7 @@ export default function Dashboard() {
             </div>
           )}
           {d.reviewStats.flagged === 0 && d.reviewStats.pending === 0 && d.expiringIn30Days === 0 && (
-            <div style={{ fontSize: "13px", color: "#5c5f62" }}>
-              Nothing needs attention right now.
-            </div>
+            <div style={{ fontSize: "13px", color: "#5c5f62" }}>Nothing needs attention right now.</div>
           )}
           <div style={{ borderTop: "1px solid #e1e3e5", paddingTop: "12px" }}>
             <div style={{ fontSize: "12px", fontWeight: 600, color: "#5c5f62", marginBottom: "8px", textTransform: "uppercase", letterSpacing: "0.04em" }}>
@@ -173,153 +116,97 @@ export default function Dashboard() {
             <s-stack direction="block" gap="tight">
               <s-button url="/app/reviews">Review queue</s-button>
               <s-button url="/app/loyalty">Loyalty settings</s-button>
+              <s-button url="/app/analytics">Analytics</s-button>
             </s-stack>
           </div>
         </s-stack>
       </s-section>
 
-      {/* ── Program health ─────────────────────────────────────────── */}
-      <s-section heading="Program health">
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
-            gap: "12px",
-          }}
-        >
-          {programMetrics.map((metric) => (
-            <div key={metric.label} style={styles.metricCard}>
-              <div style={{ fontSize: "13px", color: "#5c5f62", marginBottom: "8px" }}>
-                {metric.label}
-              </div>
-              <div
-                style={{ fontSize: "30px", fontWeight: 700, color: metric.tone, marginBottom: "12px" }}
-              >
-                {metric.value}
-              </div>
-              <div style={styles.muted}>{metric.detail}</div>
+      {/* ══ LOYALTY PROGRAM ════════════════════════════════════════════ */}
+      <s-section heading="Loyalty program">
+        {/* Key metrics row */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: "12px", marginBottom: "20px" }}>
+          {[
+            { label: "Total members",       value: fmtK(totalMembers),             detail: "all-time sign-ups",              tone: "#005bd3", bg: "#e8f2ff" },
+            { label: "Redeeming customers", value: fmtK(d.redeemingCustomers),      detail: `${redeemPct}% of members`,       tone: "#0a7d45", bg: "#dff7e5" },
+            { label: "Participation rate",  value: `${d.participationRate}%`,        detail: "members with earn activity",     tone: "#7c3aed", bg: "#f3e8ff" },
+            { label: "Points in circulation", value: fmtK(d.totalPointsInCirculation), detail: "current unredeemed balance",  tone: "#9a6700", bg: "#fff1d6" },
+          ].map((m) => (
+            <div key={m.label} style={{ padding: "16px", borderRadius: "10px", background: m.bg, border: `1px solid ${m.tone}22` }}>
+              <div style={{ fontSize: "13px", color: "#5c5f62", marginBottom: "6px" }}>{m.label}</div>
+              <div style={{ fontSize: "28px", fontWeight: 700, color: m.tone, marginBottom: "4px" }}>{m.value}</div>
+              <div style={{ fontSize: "11px", color: "#6b7280" }}>{m.detail}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* Tier breakdown */}
+        {tierEntries.length > 0 && (
+          <div style={{ marginBottom: "20px" }}>
+            <div style={{ fontSize: "12px", fontWeight: 600, color: "#5c5f62", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: "10px" }}>
+              Members by tier
+            </div>
+            <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+              {tierEntries.map(([tier, count]) => {
+                const color = tierColors[tier] ?? "#6b7280";
+                const pct   = totalMembers > 0 ? Math.round((count / totalMembers) * 100) : 0;
+                return (
+                  <div
+                    key={tier}
+                    style={{
+                      padding: "10px 16px",
+                      borderRadius: "8px",
+                      border: `1px solid ${color}33`,
+                      background: `${color}11`,
+                      minWidth: "90px",
+                      textAlign: "center",
+                    }}
+                  >
+                    <div style={{ fontSize: "18px", fontWeight: 700, color }}>{fmtK(count)}</div>
+                    <div style={{ fontSize: "11px", fontWeight: 600, color, marginTop: "2px", textTransform: "capitalize" }}>{tier}</div>
+                    <div style={{ fontSize: "10px", color: "#9ca3af", marginTop: "1px" }}>{pct}%</div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Secondary stats row */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: "10px" }}>
+          {[
+            { label: "Active rewards",     value: fmtK(d.activeRewardsCount), detail: "in reward catalog" },
+            { label: "Total redemptions",  value: fmtK(d.redemptionCount),    detail: "all-time" },
+            { label: "Expiring in 30 days", value: fmtK(d.expiringIn30Days), detail: "members at risk" },
+          ].map((s) => (
+            <div key={s.label} style={{ padding: "14px", borderRadius: "10px", background: "#f6f6f7", border: "1px solid #e1e3e5" }}>
+              <div style={{ fontSize: "22px", fontWeight: 700, marginBottom: "4px" }}>{s.value}</div>
+              <div style={{ fontSize: "12px", fontWeight: 600, color: "#374151", marginBottom: "2px" }}>{s.label}</div>
+              <div style={{ fontSize: "11px", color: "#6b7280" }}>{s.detail}</div>
             </div>
           ))}
         </div>
       </s-section>
 
-      {/* ── Quick actions ──────────────────────────────────────────── */}
-      <s-section heading="Quick actions">
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-            gap: "10px",
-          }}
-        >
+      {/* ══ REVIEWS ════════════════════════════════════════════════════ */}
+      <s-section heading="Reviews">
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: "10px" }}>
           {[
-            { label: "Loyalty settings",   detail: "Tiers, multipliers, rules", href: "/app/loyalty",  color: "#005bd3" },
-            { label: "Moderate reviews",   detail: "Approve, reject, reply",    href: "/app/reviews",  color: "#b42318" },
-            { label: "Member table",       detail: "Browse & search members",   href: "/app/loyalty",  color: "#0a7d45" },
-            { label: "Reward catalog",     detail: "Add or edit rewards",       href: "/app/loyalty",  color: "#9a6700" },
-          ].map((action) => (
-            <a
-              key={action.label}
-              href={action.href}
-              style={{
-                display: "block",
-                padding: "16px",
-                border: `1px solid ${action.color}22`,
-                borderRadius: "10px",
-                background: `${action.color}08`,
-                textDecoration: "none",
-                color: "inherit",
-              }}
-            >
-              <div style={{ fontWeight: 700, fontSize: "14px", color: action.color, marginBottom: "4px" }}>
-                {action.label}
-              </div>
-              <div style={{ fontSize: "12px", color: "#5c5f62" }}>{action.detail}</div>
-            </a>
-          ))}
-        </div>
-      </s-section>
-
-      {/* ── Reviews snapshot ───────────────────────────────────────── */}
-      <s-section heading="Reviews snapshot">
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
-            gap: "10px",
-          }}
-        >
-          {moderationSummary.map((item) => (
-            <div
-              key={item.label}
-              style={{ padding: "14px", borderRadius: "10px", background: "#f6f6f7" }}
-            >
-              <div style={{ fontSize: "24px", fontWeight: 700, marginBottom: "4px" }}>
-                {item.value}
-              </div>
+            { label: "Pending",        value: fmtK(d.reviewStats.pending),       tone: d.reviewStats.pending > 0 ? "#9a6700" : "#0a7d45", bg: d.reviewStats.pending > 0 ? "#fff1d6" : "#f6f6f7" },
+            { label: "Flagged",        value: fmtK(d.reviewStats.flagged),        tone: d.reviewStats.flagged > 0 ? "#b42318" : "#0a7d45", bg: d.reviewStats.flagged > 0 ? "#fde8e8" : "#f6f6f7" },
+            { label: "Approved today", value: fmtK(d.reviewStats.approvedToday), tone: "#0a7d45", bg: "#f6f6f7" },
+            { label: "Avg rating",     value: d.reviewStats.avgRating ? `${d.reviewStats.avgRating} ★` : "—", tone: "#9a6700", bg: "#fff7ed" },
+          ].map((item) => (
+            <div key={item.label} style={{ padding: "14px", borderRadius: "10px", background: item.bg, border: `1px solid ${item.tone}22` }}>
+              <div style={{ fontSize: "24px", fontWeight: 700, color: item.tone, marginBottom: "4px" }}>{item.value}</div>
               <div style={{ fontSize: "12px", color: "#5c5f62" }}>{item.label}</div>
             </div>
           ))}
         </div>
-      </s-section>
-
-      {/* ── Points at risk ─────────────────────────────────────────── */}
-      <s-section heading="Points at risk">
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
-            gap: "12px",
-          }}
-        >
-          {[
-            {
-              label: "Expiring in 30 days",
-              value: d.expiringIn30Days.toLocaleString(),
-              detail: "members losing points soon",
-              tone: "#b42318",
-              bg: "#fde8e8",
-            },
-            {
-              label: "Total in circulation",
-              value: d.totalPointsInCirculation.toLocaleString(),
-              detail: "points across all members",
-              tone: "#005bd3",
-              bg: "#e8f2ff",
-            },
-            {
-              label: "Active rewards",
-              value: d.activeRewardsCount.toLocaleString(),
-              detail: "redemption options available",
-              tone: "#0a7d45",
-              bg: "#dff7e5",
-            },
-            {
-              label: "Total redemptions",
-              value: d.redemptionCount.toLocaleString(),
-              detail: "all-time redemptions",
-              tone: "#9a6700",
-              bg: "#fff1d6",
-            },
-          ].map((stat) => (
-            <div
-              key={stat.label}
-              style={{
-                padding: "16px",
-                borderRadius: "10px",
-                background: stat.bg,
-                border: `1px solid ${stat.tone}22`,
-              }}
-            >
-              <div style={{ fontSize: "28px", fontWeight: 700, color: stat.tone, marginBottom: "6px" }}>
-                {stat.value}
-              </div>
-              <div style={{ fontSize: "13px", fontWeight: 600, color: stat.tone, marginBottom: "2px" }}>
-                {stat.label}
-              </div>
-              <div style={{ fontSize: "12px", color: "#5c5f62" }}>{stat.detail}</div>
-            </div>
-          ))}
+        <div style={{ marginTop: "12px" }}>
+          <a href="/app/reviews" style={{ fontSize: "13px", color: "#005bd3", textDecoration: "none", fontWeight: 500 }}>
+            Go to review queue →
+          </a>
         </div>
       </s-section>
 
@@ -344,9 +231,7 @@ export default function Dashboard() {
                 }}
               >
                 <div>
-                  <div style={{ fontSize: "14px", fontWeight: 600, marginBottom: "3px" }}>
-                    {item.label}
-                  </div>
+                  <div style={{ fontSize: "14px", fontWeight: 600, marginBottom: "3px" }}>{item.label}</div>
                   <div style={{ fontSize: "12px", color: "#5c5f62" }}>{item.meta}</div>
                 </div>
                 <div style={{ fontSize: "12px", color: "#5c5f62", whiteSpace: "nowrap" }}>

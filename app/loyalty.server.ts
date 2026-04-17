@@ -474,7 +474,7 @@ export async function getTierCounts(shop: string): Promise<Record<string, number
 
 export function getDashboardExtras(shop: string) {
   return cached(`${shop}:dash-extras`, 60_000, async () => {
-    const [balanceAgg, redemptionCount, recentTransactions] = await Promise.all([
+    const [balanceAgg, redemptionCount, recentTransactions, redeemingCustomers, tierRows, participatingCustomers] = await Promise.all([
       prisma.customer.aggregate({ where: { shop }, _sum: { pointsBalance: true } }),
       prisma.redemption.count({ where: { customer: { shop } } }),
       prisma.transaction.findMany({
@@ -483,10 +483,23 @@ export function getDashboardExtras(shop: string) {
         take: 5,
         include: { customer: { select: { email: true, firstName: true, lastName: true } } },
       }),
+      prisma.customer.count({ where: { shop, redemptions: { some: {} } } }),
+      prisma.customer.groupBy({ by: ["tier"], where: { shop }, _count: { id: true } }),
+      prisma.customer.count({ where: { shop, transactions: { some: {} } } }),
     ]);
+
+    const tierCounts: Record<string, number> = {};
+    for (const r of tierRows) tierCounts[r.tier] = r._count.id;
+
+    const totalMembers = Object.values(tierCounts).reduce((a, b) => a + b, 0);
+    const participationRate = totalMembers > 0 ? Math.round((participatingCustomers / totalMembers) * 100) : 0;
+
     return {
       totalPointsInCirculation: balanceAgg._sum.pointsBalance ?? 0,
       redemptionCount,
+      redeemingCustomers,
+      tierCounts,
+      participationRate,
       recentTransactions: recentTransactions.map((t) => {
         const name = t.customer
           ? [t.customer.firstName, t.customer.lastName].filter(Boolean).join(" ") || t.customer.email
@@ -564,6 +577,62 @@ export async function getMembers(
     memberPage: page,
     memberPageSize: MEMBERS_PAGE_SIZE,
   };
+}
+
+// ─── Admin: member detail ─────────────────────────────────────────────────────
+
+export async function getMemberDetail(shop: string, memberId: string) {
+  const customer = await prisma.customer.findFirst({
+    where: { id: memberId, shop },
+    include: {
+      transactions: { orderBy: { createdAt: "desc" }, take: 100 },
+      redemptions: {
+        orderBy: { createdAt: "desc" },
+        include: { reward: { select: { name: true, type: true, value: true } } },
+      },
+      reviews: {
+        orderBy: { createdAt: "desc" },
+        take: 25,
+        select: {
+          id: true, rating: true, title: true, status: true,
+          shopifyProductId: true, createdAt: true,
+        },
+      },
+    },
+  });
+  return customer;
+}
+
+export async function adjustPoints(
+  shop: string,
+  memberId: string,
+  delta: number,
+  reason: string,
+): Promise<{ newBalance: number }> {
+  const customer = await prisma.customer.findFirst({ where: { id: memberId, shop } });
+  if (!customer) throw new Error("Member not found");
+
+  const config = await getShopConfig(shop);
+  const newBalance = Math.max(0, customer.pointsBalance + delta);
+  const newTier = getTierForPoints(newBalance, config.tiers);
+  const newExpiry = newBalance > 0 ? addMonths(new Date(), config.expiryMonths) : null;
+
+  await prisma.$transaction([
+    prisma.transaction.create({
+      data: {
+        customerId: customer.id,
+        type: "adjust",
+        points: delta,
+        description: reason || "Manual adjustment",
+      },
+    }),
+    prisma.customer.update({
+      where: { id: customer.id },
+      data: { pointsBalance: newBalance, tier: newTier.name, pointsExpiresAt: newExpiry },
+    }),
+  ]);
+
+  return { newBalance };
 }
 
 // ─── Admin: rewards ───────────────────────────────────────────────────────────
