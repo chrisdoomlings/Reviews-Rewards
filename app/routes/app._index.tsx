@@ -52,11 +52,7 @@ const styles = {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function fmtK(n: number): string {
-  if (n >= 1000) {
-    const k = Math.round(n / 100) / 10;
-    return k + "k";
-  }
-  return String(n);
+  return n.toLocaleString();
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
