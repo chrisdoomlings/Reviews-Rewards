@@ -677,71 +677,133 @@ export async function deleteReward(id: string) {
 
 // ─── Award points for an approved review ─────────────────────────────────────
 
-// ─── Process a reward redemption ─────────────────────────────────────────────
+// ─── Reserve → finalize/cancel redemption (race-safe two-phase) ──────────────
+//
+// Why two phases? Creating a Shopify discount code is an external I/O call that
+// can fail or be duplicated under concurrency. The old single-phase flow had two
+// gaps: (1) two simultaneous redemptions could both pass a balance check against
+// the same stale read and double-spend, (2) if Shopify code creation succeeded
+// but the DB deduction failed afterwards the customer got a free discount.
+//
+// Fixed by: reserve first (atomic conditional decrement + pending Redemption),
+// then create the Shopify code, then finalize (attach code + mark fulfilled) or
+// cancel (refund points + mark cancelled) depending on the outcome.
 
-export interface RedemptionResult {
-  success: boolean;
+export interface Reservation {
+  redemptionId: string;
+  reward: { id: string; name: string; type: string; value: string };
   pointsSpent: number;
   newBalance: number;
-  error?: string;
 }
 
-export async function processRedemption(
+export type ReservationResult =
+  | { success: true; reservation: Reservation }
+  | { success: false; error: string };
+
+export async function reserveRedemption(
   shop: string,
   shopifyCustomerId: string,
   rewardId: string,
-  discountCode: string,
-): Promise<RedemptionResult> {
-  const [customer, reward, config] = await Promise.all([
-    prisma.customer.findUnique({ where: { shopifyCustomerId } }),
-    prisma.reward.findUnique({ where: { id: rewardId } }),
-    getShopConfig(shop),
-  ]);
+): Promise<ReservationResult> {
+  return prisma.$transaction(async (tx) => {
+    const customer = await tx.customer.findUnique({ where: { shopifyCustomerId } });
+    if (!customer || customer.shop !== shop) {
+      return { success: false, error: "Customer not found" } as const;
+    }
 
-  if (!customer || customer.shop !== shop) {
-    return { success: false, pointsSpent: 0, newBalance: 0, error: "Customer not found" };
-  }
-  if (!reward || reward.shop !== shop || !reward.isActive) {
-    return { success: false, pointsSpent: 0, newBalance: 0, error: "Reward not available" };
-  }
-  if (customer.pointsBalance < reward.pointsCost) {
-    return {
-      success: false,
-      pointsSpent: 0,
-      newBalance: customer.pointsBalance,
-      error: "Insufficient points",
-    };
-  }
+    const reward = await tx.reward.findUnique({ where: { id: rewardId } });
+    if (!reward || reward.shop !== shop || !reward.isActive) {
+      return { success: false, error: "Reward not available" } as const;
+    }
 
-  const newBalance = customer.pointsBalance - reward.pointsCost;
-  const newTier = getTierForPoints(newBalance, config.tiers);
-  const newExpiry = newBalance > 0 ? addMonths(new Date(), config.expiryMonths) : null;
+    // Atomic conditional decrement — only succeeds if balance is still sufficient.
+    // Beats out concurrent redemption attempts without needing serializable isolation.
+    const dec = await tx.customer.updateMany({
+      where: { id: customer.id, pointsBalance: { gte: reward.pointsCost } },
+      data: { pointsBalance: { decrement: reward.pointsCost } },
+    });
+    if (dec.count !== 1) {
+      return { success: false, error: "Insufficient points" } as const;
+    }
 
-  await prisma.$transaction([
-    prisma.redemption.create({
+    const redemption = await tx.redemption.create({
       data: {
         customerId: customer.id,
         rewardId,
         pointsSpent: reward.pointsCost,
-        discountCode,
-        status: "fulfilled",
+        status: "pending",
       },
-    }),
-    prisma.transaction.create({
+    });
+
+    await tx.transaction.create({
       data: {
         customerId: customer.id,
         type: "redeem",
         points: -reward.pointsCost,
         description: `Redeemed: ${reward.name}`,
       },
+    });
+
+    return {
+      success: true as const,
+      reservation: {
+        redemptionId: redemption.id,
+        reward: { id: reward.id, name: reward.name, type: reward.type, value: reward.value },
+        pointsSpent: reward.pointsCost,
+        newBalance: customer.pointsBalance - reward.pointsCost,
+      },
+    };
+  });
+}
+
+export async function finalizeRedemption(
+  redemptionId: string,
+  discountCode: string,
+): Promise<void> {
+  const redemption = await prisma.redemption.findUnique({ where: { id: redemptionId } });
+  if (!redemption || redemption.status !== "pending") return;
+
+  const customer = await prisma.customer.findUnique({ where: { id: redemption.customerId } });
+  if (!customer) return;
+
+  const config = await getShopConfig(customer.shop);
+  const newTier = getTierForPoints(customer.pointsBalance, config.tiers);
+  const newExpiry = customer.pointsBalance > 0 ? addMonths(new Date(), config.expiryMonths) : null;
+
+  await prisma.$transaction([
+    prisma.redemption.update({
+      where: { id: redemptionId },
+      data: { discountCode, status: "fulfilled" },
     }),
     prisma.customer.update({
       where: { id: customer.id },
-      data: { pointsBalance: newBalance, tier: newTier.name, pointsExpiresAt: newExpiry },
+      data: { tier: newTier.name, pointsExpiresAt: newExpiry },
     }),
   ]);
+}
 
-  return { success: true, pointsSpent: reward.pointsCost, newBalance };
+export async function cancelRedemption(redemptionId: string): Promise<void> {
+  const redemption = await prisma.redemption.findUnique({ where: { id: redemptionId } });
+  if (!redemption || redemption.status !== "pending") return;
+
+  await prisma.$transaction([
+    prisma.customer.update({
+      where: { id: redemption.customerId },
+      data: { pointsBalance: { increment: redemption.pointsSpent } },
+    }),
+    prisma.transaction.create({
+      data: {
+        customerId: redemption.customerId,
+        type: "adjust",
+        points: redemption.pointsSpent,
+        description: "Refund: redemption cancelled",
+      },
+    }),
+    prisma.redemption.update({
+      where: { id: redemptionId },
+      data: { status: "cancelled" },
+    }),
+  ]);
 }
 
 // ─── Award points for an approved review ─────────────────────────────────────

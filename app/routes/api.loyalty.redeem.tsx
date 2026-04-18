@@ -16,7 +16,7 @@
 import { randomBytes } from "crypto";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import prisma from "../db.server";
-import { getRewards, processRedemption } from "../loyalty.server";
+import { reserveRedemption, finalizeRedemption, cancelRedemption } from "../loyalty.server";
 import { corsJson, corsPreflight, CORS_HEADERS } from "../cors.server";
 
 export const loader = ({ request }: LoaderFunctionArgs) => {
@@ -136,13 +136,6 @@ export async function action({ request }: ActionFunctionArgs) {
     return corsJson({ error: "shop, shopifyCustomerId, and rewardId are required" }, { status: 400 });
   }
 
-  // Look up the reward to validate type before touching Shopify API
-  const rewards = await getRewards(shop);
-  const reward = rewards.find((r) => r.id === rewardId && r.isActive);
-  if (!reward) {
-    return corsJson({ error: "Reward not available" }, { status: 404 });
-  }
-
   // Get the shop's offline access token
   const session = await prisma.session.findFirst({
     where: { shop, isOnline: false },
@@ -153,12 +146,20 @@ export async function action({ request }: ActionFunctionArgs) {
     return corsJson({ error: "Shop not connected" }, { status: 503 });
   }
 
-  // Generate a unique discount code: DOOM-XXXXXXXX
-  const code = "DOOM-" + randomBytes(4).toString("hex").toUpperCase();
+  // Phase 1: atomically reserve points + create pending redemption.
+  const reserved = await reserveRedemption(shop, shopifyCustomerId, rewardId);
+  if (!reserved.success) {
+    return corsJson({ error: reserved.error }, { status: 400 });
+  }
+  const { redemptionId, reward, newBalance } = reserved.reservation;
 
-  // Create the Shopify discount code first — if this fails, no points are touched
+  // Phase 2: create the Shopify discount code.
+  const code = "DOOM-" + randomBytes(4).toString("hex").toUpperCase();
   const discountResult = await createShopifyDiscountCode(shop, session.accessToken, reward, code);
+
   if (!discountResult.ok) {
+    // Shopify rejected the code — refund the reserved points.
+    await cancelRedemption(redemptionId);
     console.error(`[redeem] Shopify discount creation failed: ${discountResult.error}`);
     return corsJson(
       { error: "Could not generate discount code. Please try again." },
@@ -166,18 +167,12 @@ export async function action({ request }: ActionFunctionArgs) {
     );
   }
 
-  // Deduct points and record redemption
-  const result = await processRedemption(shop, shopifyCustomerId, rewardId, code);
-  if (!result.success) {
-    // Points not deducted — Shopify code was created but won't be served.
-    // Log for manual cleanup if needed.
-    console.error(`[redeem] DB redemption failed after Shopify code created: ${result.error} (code: ${code})`);
-    return corsJson({ error: result.error ?? "Redemption failed" }, { status: 400 });
-  }
+  // Phase 3: mark the redemption fulfilled and attach the code.
+  await finalizeRedemption(redemptionId, code);
 
   return corsJson({
     discountCode: code,
-    pointsSpent: result.pointsSpent,
-    newBalance: result.newBalance,
+    pointsSpent: reserved.reservation.pointsSpent,
+    newBalance,
   });
 }

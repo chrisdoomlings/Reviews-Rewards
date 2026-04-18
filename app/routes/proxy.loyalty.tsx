@@ -11,7 +11,9 @@ import {
   getCustomerLoyalty,
   getRewards,
   getShopConfig,
-  processRedemption,
+  reserveRedemption,
+  finalizeRedemption,
+  cancelRedemption,
   type ShopConfigData,
   type CustomerLoyaltyState,
 } from "../loyalty.server";
@@ -67,7 +69,7 @@ function rewardDescription(reward: Reward): string {
 async function createShopifyDiscountCode(
   shop: string,
   accessToken: string,
-  reward: Reward,
+  reward: { name: string; type: string; value: string },
   code: string,
 ): Promise<{ ok: boolean; error?: string }> {
   let customerGetsValue: Record<string, unknown>;
@@ -198,20 +200,27 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     if (!session?.accessToken) {
       redeemError = "Store not connected — please try again later.";
     } else {
-      const code = "DOOM-" + randomBytes(4).toString("hex").toUpperCase();
-      const shopifyResult = await createShopifyDiscountCode(shop, session.accessToken, reward, code);
-
-      if (!shopifyResult.ok) {
-        redeemError = shopifyResult.error ?? "Could not generate discount code. Please try again.";
+      // Phase 1: atomic point reservation.
+      const reserved = await reserveRedemption(shop, customerId, reward.id);
+      if (!reserved.success) {
+        redeemError = reserved.error;
       } else {
-        const result = await processRedemption(shop, customerId, reward.id, code);
-        if (result.success) {
+        const { redemptionId, reward: reservedReward } = reserved.reservation;
+
+        // Phase 2: create Shopify discount code.
+        const code = "DOOM-" + randomBytes(4).toString("hex").toUpperCase();
+        const shopifyResult = await createShopifyDiscountCode(shop, session.accessToken, reservedReward, code);
+
+        if (!shopifyResult.ok) {
+          // Refund the reserved points — the discount code never got issued.
+          await cancelRedemption(redemptionId);
+          redeemError = shopifyResult.error ?? "Could not generate discount code. Please try again.";
+        } else {
+          // Phase 3: mark fulfilled + attach code.
+          await finalizeRedemption(redemptionId, code);
           redeemedCode = code;
           redeemRewardName = reward.name;
-          // Re-fetch updated loyalty state
           updatedLoyalty = await getCustomerLoyalty(customerId);
-        } else {
-          redeemError = result.error ?? "Redemption failed. Please try again.";
         }
       }
     }
