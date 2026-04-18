@@ -126,14 +126,26 @@ export async function action({ request }: ActionFunctionArgs) {
     return corsJson({ error: "Invalid request body" }, { status: 400 });
   }
 
-  const { shop, shopifyCustomerId, rewardId } = body as {
-    shop: string;
+  const { shop: bodyShop, shopifyCustomerId, rewardId } = body as {
+    shop?: string;
     shopifyCustomerId: string;
     rewardId: string;
   };
 
-  if (!shop || !shopifyCustomerId || !rewardId) {
-    return corsJson({ error: "shop, shopifyCustomerId, and rewardId are required" }, { status: 400 });
+  if (!shopifyCustomerId || !rewardId) {
+    return corsJson({ error: "shopifyCustomerId and rewardId are required" }, { status: 400 });
+  }
+
+  let shop = bodyShop ?? "";
+  if (!shop) {
+    const customer = await prisma.customer.findUnique({
+      where: { shopifyCustomerId },
+      select: { shop: true },
+    });
+    if (customer) shop = customer.shop;
+  }
+  if (!shop) {
+    return corsJson({ error: "Could not resolve shop for customer" }, { status: 400 });
   }
 
   // Get the shop's offline access token

@@ -11,24 +11,23 @@ export default async () => {
 };
 
 function LoyaltyBlock() {
-  const [state, setState] = useState({ status: 'loading' });
+  const [state, setState] = useState(/** @type {{status: string, loyalty?: any, error?: string}} */({ status: 'loading' }));
   const [rewards, setRewards] = useState([]);
   const [redeeming, setRedeeming] = useState(null);
   const [flash, setFlash] = useState(null);
 
-  const customerGid = shopify.customer?.id ?? '';
+  const customerGid = shopify.authenticatedAccount?.customer?.value?.id ?? '';
   const customerId = customerGid.split('/').pop() ?? '';
-  const shop = shopify.shop?.myshopifyDomain ?? '';
 
   async function loadAll() {
-    if (!customerId || !shop) {
+    if (!customerId) {
       setState({ status: 'error', error: 'Could not identify customer' });
       return;
     }
     try {
       const [loyaltyResp, rewardsResp] = await Promise.all([
-        fetch(`${APP_URL}/api/loyalty/customer/${customerId}?shop=${shop}`),
-        fetch(`${APP_URL}/api/loyalty/rewards?shop=${shop}`),
+        fetch(`${APP_URL}/api/loyalty/customer/${customerId}`),
+        fetch(`${APP_URL}/api/loyalty/rewards?customerId=${customerId}`),
       ]);
       const loyalty = await loyaltyResp.json();
       const rewardsData = await rewardsResp.json();
@@ -50,7 +49,7 @@ function LoyaltyBlock() {
       const resp = await fetch(`${APP_URL}/api/loyalty/redeem`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ shop, shopifyCustomerId: customerId, rewardId }),
+        body: JSON.stringify({ shopifyCustomerId: customerId, rewardId }),
       });
       const data = await resp.json();
       if (!resp.ok) {
@@ -81,7 +80,7 @@ function LoyaltyBlock() {
     return (
       <s-section heading="Loyalty rewards">
         <s-banner tone="critical">
-          <s-text>Unable to load your loyalty points right now.</s-text>
+          <s-text>{state.error ?? 'Unable to load your loyalty points right now.'}</s-text>
         </s-banner>
       </s-section>
     );
