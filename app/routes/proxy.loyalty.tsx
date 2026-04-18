@@ -14,6 +14,7 @@ import {
   reserveRedemption,
   finalizeRedemption,
   cancelRedemption,
+  ensureCustomerAndGrantSignup,
   type ShopConfigData,
   type CustomerLoyaltyState,
 } from "../loyalty.server";
@@ -136,6 +137,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   let loyalty: CustomerLoyaltyState | null = null;
 
   if (customerId) {
+    // On first visit, create the customer record + award the signup bonus.
+    // Idempotent — subsequent visits are a no-op. Works without read_customers
+    // scope, so we don't need protected customer data approval.
+    await ensureCustomerAndGrantSignup(shop, customerId);
+
     const [cust, loy] = await Promise.all([
       prisma.customer.findFirst({
         where: { shopifyCustomerId: customerId, shop },

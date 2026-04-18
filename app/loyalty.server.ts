@@ -889,6 +889,39 @@ export async function awardPointsForAction(
   return { pointsAwarded: points, newBalance };
 }
 
+// ─── Signup bonus (first-interaction bootstrap) ─────────────────────────────
+// Creates a customer record if missing and awards the create_account bonus
+// exactly once. Idempotent — safe to call on every proxy-page visit.
+export async function ensureCustomerAndGrantSignup(
+  shop: string,
+  shopifyCustomerId: string,
+): Promise<{ pointsAwarded: number; newBalance: number; created: boolean }> {
+  const config = await getShopConfig(shop);
+
+  const existing = await prisma.customer.findUnique({ where: { shopifyCustomerId } });
+
+  const customer = existing ?? await prisma.customer.create({
+    data: {
+      shopifyCustomerId,
+      shop,
+      email: `unknown+${shopifyCustomerId}@placeholder.local`,
+      pointsBalance: 0,
+      tier: config.tiers[0].name,
+    },
+  });
+
+  const alreadyGranted = await prisma.transaction.findFirst({
+    where: { customerId: customer.id, description: ACTION_LABELS.create_account },
+    select: { id: true },
+  });
+  if (alreadyGranted) {
+    return { pointsAwarded: 0, newBalance: customer.pointsBalance, created: !existing };
+  }
+
+  const result = await awardPointsForAction(customer.id, shop, "create_account");
+  return { ...result, created: !existing };
+}
+
 // ─── Shared internal: award points + update tier + expiry ────────────────────
 
 async function _awardPoints(
