@@ -1,0 +1,52 @@
+<script src="{{ 'doomlings-rating-badge.js' | asset_url }}" defer></script>
+
+<div
+  data-doomlings-rating-badge
+  data-product-id="{{ product.id }}"
+  data-shop="{{ shop.permanent_domain }}"
+  data-app-url="https://reviews-rewards.vercel.app"
+  data-color="{{ block.settings.star_color }}"
+  data-show-count="{{ block.settings.show_count }}"
+  data-align="{{ block.settings.align }}"
+  data-show-zero="{{ block.settings.show_zero_reviews }}"
+  {{ block.shopify_attributes }}
+></div>
+
+{% schema %}
+{
+  "name": "Product Rating Badge",
+  "target": "section",
+  "settings": [
+    {
+      "type": "color",
+      "id": "star_color",
+      "label": "Star color",
+      "default": "#f59e0b"
+    },
+    {
+      "type": "checkbox",
+      "id": "show_count",
+      "label": "Show review count",
+      "default": true
+    },
+    {
+      "type": "checkbox",
+      "id": "show_zero_reviews",
+      "label": "Show badge for products with zero reviews",
+      "info": "When off, the badge hides itself on products with no reviews yet.",
+      "default": true
+    },
+    {
+      "type": "select",
+      "id": "align",
+      "label": "Alignment",
+      "options": [
+        { "value": "left", "label": "Left" },
+        { "value": "center", "label": "Center" },
+        { "value": "right", "label": "Right" }
+      ],
+      "default": "left"
+    }
+  ]
+}
+{% endschema %}
