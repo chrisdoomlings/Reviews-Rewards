@@ -459,8 +459,13 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,sans-seri
 .login-prompt h2{font-size:24px;font-weight:900;color:#5b21b6;text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px}
 .login-prompt p{color:#6b7280;margin-bottom:24px;font-size:15px}
 </style>
+</head>
+<body>
 
-<div class="doom-loyalty">
+${d.loggedIn ? `<div class="account-bar"><div class="wrap">
+  <a href="/account">&larr; Back to account</a>
+  <span style="color:#6b7280;font-size:13px;font-weight:500">Rewards</span>
+</div></div>` : ""}
 
 ${!d.loggedIn ? `<div class="hero"><div class="wrap">${notLoggedIn}</div></div>` : `
 <div class="hero"><div class="wrap">${loggedInHero}</div></div>
@@ -515,6 +520,7 @@ ${!d.loggedIn ? `<div class="hero"><div class="wrap">${notLoggedIn}</div></div>`
   </div>
 </section>`}
 
-</div>`;
+</body>
+</html>`;
 }
 
