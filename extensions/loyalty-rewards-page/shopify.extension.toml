@@ -1,0 +1,15 @@
+api_version = "2026-01"
+
+[[extensions]]
+name = "loyalty-rewards-page"
+handle = "loyalty-rewards-page"
+type = "ui_extension"
+uid = "76fbbc91-e668-461e-ad95-a98b94d32c3d"
+
+[[extensions.targeting]]
+module = "./src/RewardsPage.jsx"
+target = "customer-account.page.render"
+
+[extensions.capabilities]
+api_access = true
+network_access = true

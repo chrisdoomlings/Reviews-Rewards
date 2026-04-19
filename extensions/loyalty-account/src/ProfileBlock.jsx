@@ -50,18 +50,17 @@ function LoyaltyBlock() {
   const tierDisplay = loyalty.tierDisplayName ?? 'Prepper';
   const nextTierDisplay = loyalty.nextTierDisplayName;
   const pointsToNext = loyalty.pointsToNextTier;
-  const shop = loyalty.shop;
-  const rewardsUrl = shop ? `https://${shop}/apps/loyalty` : null;
+  const rewardsUrl = 'extension:loyalty-rewards-page/';
 
   return (
     <s-section heading="Loyalty rewards">
       <s-stack direction="block" gap="base">
-        <s-stack direction="block" gap="tight">
-          <s-heading level="2">You have {balance.toLocaleString()} points</s-heading>
-          <s-stack direction="inline" gap="tight" alignItems="center">
+        <s-stack direction="block" gap="small-300">
+          <s-heading>You have {balance.toLocaleString()} points</s-heading>
+          <s-stack direction="inline" gap="small-300" align-items="center">
             <s-badge>{tierDisplay}</s-badge>
             {loyalty.pointsExpiresAt && (
-              <s-text tone="subdued">
+              <s-text color="subdued">
                 Expires {new Date(loyalty.pointsExpiresAt).toLocaleDateString()}
               </s-text>
             )}
@@ -69,16 +68,12 @@ function LoyaltyBlock() {
         </s-stack>
 
         {nextTierDisplay && pointsToNext > 0 && (
-          <s-text tone="subdued">
+          <s-text color="subdued">
             Earn {pointsToNext.toLocaleString()} more points to unlock {nextTierDisplay}.
           </s-text>
         )}
 
-        {rewardsUrl && (
-          <s-button href={rewardsUrl} target="_blank">
-            View rewards & redeem
-          </s-button>
-        )}
+        <s-button href={rewardsUrl}>View rewards & redeem</s-button>
       </s-stack>
     </s-section>
   );
