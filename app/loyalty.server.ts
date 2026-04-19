@@ -311,6 +311,7 @@ export async function awardPointsForOrder(input: AwardPointsInput): Promise<Awar
 export interface CustomerLoyaltyState {
   found: boolean;
   customerId: string | null;
+  shop: string | null;
   pointsBalance: number;
   tier: string;
   tierDisplayName: string;
@@ -347,6 +348,7 @@ export async function getCustomerLoyalty(shopifyCustomerId: string): Promise<Cus
     return {
       found: false,
       customerId: null,
+      shop: null,
       pointsBalance: 0,
       tier: baseTier.name,
       tierDisplayName: baseTier.displayName,
@@ -368,6 +370,7 @@ export async function getCustomerLoyalty(shopifyCustomerId: string): Promise<Cus
   return {
     found: true,
     customerId: customer.shopifyCustomerId,
+    shop: customer.shop,
     pointsBalance: customer.pointsBalance,
     tier: customer.tier,
     tierDisplayName: currentTierConfig.displayName,
