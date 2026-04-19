@@ -155,7 +155,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   return new Response(
     buildPage({ loggedIn: !!customerId, firstName, loyalty, config, rewards: activeRewards, shop }),
-    { headers: { "Content-Type": "text/html; charset=utf-8" } },
+    { headers: { "Content-Type": "application/liquid" } },
   );
 };
 
@@ -173,7 +173,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       loggedIn: false, firstName: null, loyalty: null,
       config: await getShopConfig(shop), rewards: [], shop,
       redeemError: "You must be logged in to redeem points.",
-    }), { headers: { "Content-Type": "text/html; charset=utf-8" } });
+    }), { headers: { "Content-Type": "application/liquid" } });
   }
 
   const form = await request.formData();
@@ -244,7 +244,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       redeemError,
       redeemRewardName,
     }),
-    { headers: { "Content-Type": "text/html; charset=utf-8" } },
+    { headers: { "Content-Type": "application/liquid" } },
   );
 };
 
@@ -364,97 +364,91 @@ function buildPage(d: PageData): string {
       </div>
     </div>`;
 
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>DOOM Points — Doomlings</title>
-<style>
-*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,sans-serif;background:#fff;color:#1a1a2e;-webkit-font-smoothing:antialiased}
-.wrap{max-width:920px;margin:0 auto;padding:0 20px}
+  return `<style>
+.doom-loyalty *,.doom-loyalty *::before,.doom-loyalty *::after{box-sizing:border-box;margin:0;padding:0}
+.doom-loyalty{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,sans-serif;color:#1a1a2e;-webkit-font-smoothing:antialiased}
+.doom-loyalty .wrap{max-width:920px;margin:0 auto;padding:0 20px}
 
 /* ── Hero ── */
-.hero{padding:48px 20px 40px;text-align:center;border-bottom:1px solid #f3f4f6}
-.hi-name{font-size:clamp(22px,4vw,36px);font-weight:900;text-transform:uppercase;letter-spacing:.04em;color:#f59e0b;margin-bottom:8px}
-.points-balance{font-size:clamp(18px,3.5vw,30px);font-weight:900;text-transform:uppercase;letter-spacing:.04em;color:#1a1a2e}
-.pts-num{color:#f59e0b}
-.hero-buttons{display:flex;gap:12px;justify-content:center;margin-top:24px;flex-wrap:wrap}
-.btn-primary{display:inline-block;padding:13px 28px;background:#f59e0b;color:#1a1a2e;border-radius:4px;font-size:14px;font-weight:800;text-decoration:none;text-transform:uppercase;letter-spacing:.08em;border:2px solid #f59e0b;cursor:pointer}
-.btn-primary:hover{background:#d97706;border-color:#d97706}
-.btn-outline{display:inline-block;padding:13px 28px;background:transparent;color:#5b21b6;border:2px solid #5b21b6;border-radius:4px;font-size:14px;font-weight:800;text-decoration:none;text-transform:uppercase;letter-spacing:.08em}
-.btn-outline:hover{background:#5b21b611}
+.doom-loyalty .hero{padding:48px 20px 40px;text-align:center;border-bottom:1px solid #f3f4f6}
+.doom-loyalty .hi-name{font-size:clamp(22px,4vw,36px);font-weight:900;text-transform:uppercase;letter-spacing:.04em;color:#f59e0b;margin-bottom:8px}
+.doom-loyalty .points-balance{font-size:clamp(18px,3.5vw,30px);font-weight:900;text-transform:uppercase;letter-spacing:.04em;color:#1a1a2e}
+.doom-loyalty .pts-num{color:#f59e0b}
+.doom-loyalty .hero-buttons{display:flex;gap:12px;justify-content:center;margin-top:24px;flex-wrap:wrap}
+.doom-loyalty .btn-primary{display:inline-block;padding:13px 28px;background:#f59e0b;color:#1a1a2e;border-radius:4px;font-size:14px;font-weight:800;text-decoration:none;text-transform:uppercase;letter-spacing:.08em;border:2px solid #f59e0b;cursor:pointer}
+.doom-loyalty .btn-primary:hover{background:#d97706;border-color:#d97706}
+.doom-loyalty .btn-outline{display:inline-block;padding:13px 28px;background:transparent;color:#5b21b6;border:2px solid #5b21b6;border-radius:4px;font-size:14px;font-weight:800;text-decoration:none;text-transform:uppercase;letter-spacing:.08em}
+.doom-loyalty .btn-outline:hover{background:#5b21b611}
 
 /* ── Section title ── */
-.section-title{font-size:clamp(18px,3vw,26px);font-weight:900;text-transform:uppercase;text-align:center;letter-spacing:.06em;margin-bottom:32px}
+.doom-loyalty .section-title{font-size:clamp(18px,3vw,26px);font-weight:900;text-transform:uppercase;text-align:center;letter-spacing:.06em;margin-bottom:32px}
 
 /* ── Earn section ── */
-.earn{padding:48px 0}
-.earn .section-title{color:#5b21b6}
-.earn-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(185px,1fr));gap:12px}
-.earn-card{border:1px solid #e5e7eb;border-radius:8px;padding:24px 14px;text-align:center;background:#fff}
-.earn-icon{font-size:30px;margin-bottom:10px}
-.earn-pts{font-size:13px;font-weight:800;color:#f97316;text-transform:uppercase;letter-spacing:.04em;margin-bottom:5px;line-height:1.3}
-.earn-desc{font-size:12px;color:#6b7280;line-height:1.4}
+.doom-loyalty .earn{padding:48px 0}
+.doom-loyalty .earn .section-title{color:#5b21b6}
+.doom-loyalty .earn-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(185px,1fr));gap:12px}
+.doom-loyalty .earn-card{border:1px solid #e5e7eb;border-radius:8px;padding:24px 14px;text-align:center;background:#fff}
+.doom-loyalty .earn-icon{font-size:30px;margin-bottom:10px}
+.doom-loyalty .earn-pts{font-size:13px;font-weight:800;color:#f97316;text-transform:uppercase;letter-spacing:.04em;margin-bottom:5px;line-height:1.3}
+.doom-loyalty .earn-desc{font-size:12px;color:#6b7280;line-height:1.4}
 
 /* ── Redeem section ── */
-.redeem{background:#1e0a3c;padding:52px 0;color:#fff}
-.redeem .section-title{color:#f59e0b}
-.redeem-subtitle{text-align:center;color:rgba(255,255,255,.7);font-size:14px;line-height:1.7;max-width:500px;margin:0 auto 12px}
-.points-value-line{text-align:center;font-size:14px;font-weight:700;color:#f59e0b;margin-bottom:32px;letter-spacing:.02em}
-.redeem-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px}
-.redeem-card{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.18);border-radius:8px;padding:24px 16px;text-align:center}
-.reward-value{font-size:28px;font-weight:900;color:#fff;margin-bottom:4px}
-.reward-pts{font-size:11px;font-weight:800;color:#f59e0b;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px}
-.reward-desc{font-size:12px;color:rgba(255,255,255,.55);margin-bottom:0;line-height:1.4}
-.btn-redeem{display:block;width:100%;padding:10px;background:#f59e0b;color:#1a1a2e;border:none;border-radius:4px;font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;cursor:pointer;margin-top:16px}
-.btn-redeem:hover:not(:disabled){background:#d97706}
-.btn-redeem:disabled{opacity:.4;cursor:not-allowed}
-.login-to-redeem{margin-top:16px;font-size:12px;color:rgba(255,255,255,.4)}
-.code-box{background:rgba(245,158,11,.15);border:2px solid #f59e0b;border-radius:10px;padding:24px;text-align:center;margin-bottom:32px}
-.code-label{font-size:12px;color:rgba(255,255,255,.65);text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px}
-.code{font-size:30px;font-weight:900;color:#f59e0b;letter-spacing:.12em;margin-bottom:8px}
-.code-hint{font-size:12px;color:rgba(255,255,255,.5)}
-.error-banner{background:rgba(180,35,24,.2);border:1px solid rgba(255,100,80,.4);border-radius:8px;padding:14px 18px;text-align:center;color:#ff9999;font-weight:600;font-size:14px;margin-bottom:24px}
+.doom-loyalty .redeem{background:#1e0a3c;padding:52px 0;color:#fff}
+.doom-loyalty .redeem .section-title{color:#f59e0b}
+.doom-loyalty .redeem-subtitle{text-align:center;color:rgba(255,255,255,.7);font-size:14px;line-height:1.7;max-width:500px;margin:0 auto 12px}
+.doom-loyalty .points-value-line{text-align:center;font-size:14px;font-weight:700;color:#f59e0b;margin-bottom:32px;letter-spacing:.02em}
+.doom-loyalty .redeem-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px}
+.doom-loyalty .redeem-card{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.18);border-radius:8px;padding:24px 16px;text-align:center}
+.doom-loyalty .reward-value{font-size:28px;font-weight:900;color:#fff;margin-bottom:4px}
+.doom-loyalty .reward-pts{font-size:11px;font-weight:800;color:#f59e0b;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px}
+.doom-loyalty .reward-desc{font-size:12px;color:rgba(255,255,255,.55);margin-bottom:0;line-height:1.4}
+.doom-loyalty .btn-redeem{display:block;width:100%;padding:10px;background:#f59e0b;color:#1a1a2e;border:none;border-radius:4px;font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;cursor:pointer;margin-top:16px}
+.doom-loyalty .btn-redeem:hover:not(:disabled){background:#d97706}
+.doom-loyalty .btn-redeem:disabled{opacity:.4;cursor:not-allowed}
+.doom-loyalty .login-to-redeem{margin-top:16px;font-size:12px;color:rgba(255,255,255,.4)}
+.doom-loyalty .code-box{background:rgba(245,158,11,.15);border:2px solid #f59e0b;border-radius:10px;padding:24px;text-align:center;margin-bottom:32px}
+.doom-loyalty .code-label{font-size:12px;color:rgba(255,255,255,.65);text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px}
+.doom-loyalty .code{font-size:30px;font-weight:900;color:#f59e0b;letter-spacing:.12em;margin-bottom:8px}
+.doom-loyalty .code-hint{font-size:12px;color:rgba(255,255,255,.5)}
+.doom-loyalty .error-banner{background:rgba(180,35,24,.2);border:1px solid rgba(255,100,80,.4);border-radius:8px;padding:14px 18px;text-align:center;color:#ff9999;font-weight:600;font-size:14px;margin-bottom:24px}
 
 /* ── Tiers ── */
-.tiers{padding:52px 0}
-.tiers .section-title{color:#5b21b6}
-.tier-progress{margin-bottom:36px;max-width:600px;margin-left:auto;margin-right:auto}
-.tier-progress-row{display:flex;justify-content:space-between;font-size:12px;color:#6b7280;margin-bottom:6px}
-.tier-bar-bg{background:#e5e7eb;border-radius:99px;height:10px;overflow:hidden}
-.tier-bar-fill{background:linear-gradient(90deg,#f59e0b,#f97316);height:100%;border-radius:99px}
-.tier-status{text-align:center;margin-top:8px;font-size:13px;color:#5b21b6;font-weight:600}
-.tier-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:16px}
-.tier-card{border:2px solid #e5e7eb;border-radius:10px;padding:24px 16px;text-align:center}
-.tier-card.current{border-color:#f59e0b;background:#fffbeb}
-.current-badge{display:inline-block;padding:3px 10px;background:#f59e0b;color:#1a1a2e;border-radius:99px;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px}
-.tier-name{font-size:20px;font-weight:900;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px}
-.tier-pts{font-size:12px;color:#9ca3af;margin-bottom:16px}
-.tier-perks{list-style:none;font-size:13px;color:#374151;text-align:left}
-.tier-perks li{padding:4px 0 4px 18px;position:relative;line-height:1.4}
-.tier-perks li::before{content:'✓';position:absolute;left:0;color:#5b21b6;font-weight:700}
+.doom-loyalty .tiers{padding:52px 0}
+.doom-loyalty .tiers .section-title{color:#5b21b6}
+.doom-loyalty .tier-progress{margin-bottom:36px;max-width:600px;margin-left:auto;margin-right:auto}
+.doom-loyalty .tier-progress-row{display:flex;justify-content:space-between;font-size:12px;color:#6b7280;margin-bottom:6px}
+.doom-loyalty .tier-bar-bg{background:#e5e7eb;border-radius:99px;height:10px;overflow:hidden}
+.doom-loyalty .tier-bar-fill{background:linear-gradient(90deg,#f59e0b,#f97316);height:100%;border-radius:99px}
+.doom-loyalty .tier-status{text-align:center;margin-top:8px;font-size:13px;color:#5b21b6;font-weight:600}
+.doom-loyalty .tier-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:16px}
+.doom-loyalty .tier-card{border:2px solid #e5e7eb;border-radius:10px;padding:24px 16px;text-align:center}
+.doom-loyalty .tier-card.current{border-color:#f59e0b;background:#fffbeb}
+.doom-loyalty .current-badge{display:inline-block;padding:3px 10px;background:#f59e0b;color:#1a1a2e;border-radius:99px;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px}
+.doom-loyalty .tier-name{font-size:20px;font-weight:900;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px}
+.doom-loyalty .tier-pts{font-size:12px;color:#9ca3af;margin-bottom:16px}
+.doom-loyalty .tier-perks{list-style:none;font-size:13px;color:#374151;text-align:left}
+.doom-loyalty .tier-perks li{padding:4px 0 4px 18px;position:relative;line-height:1.4}
+.doom-loyalty .tier-perks li::before{content:'✓';position:absolute;left:0;color:#5b21b6;font-weight:700}
 
 /* ── History ── */
-.history{padding:48px 0;border-top:2px solid #f3f4f6}
-.history .section-title{color:#5b21b6}
-.tx-list{display:flex;flex-direction:column}
-.tx-row{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:14px 0;border-bottom:1px solid #f3f4f6}
-.tx-desc{font-size:14px;color:#1f2937;font-weight:500}
-.tx-meta{font-size:12px;color:#9ca3af;margin-top:2px}
-.tx-pts{font-size:15px;font-weight:700;white-space:nowrap}
-.tx-pts.earn{color:#16a34a}
-.tx-pts.redeem{color:#dc2626}
-.tx-pts.expire{color:#9ca3af}
+.doom-loyalty .history{padding:48px 0;border-top:2px solid #f3f4f6}
+.doom-loyalty .history .section-title{color:#5b21b6}
+.doom-loyalty .tx-list{display:flex;flex-direction:column}
+.doom-loyalty .tx-row{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:14px 0;border-bottom:1px solid #f3f4f6}
+.doom-loyalty .tx-desc{font-size:14px;color:#1f2937;font-weight:500}
+.doom-loyalty .tx-meta{font-size:12px;color:#9ca3af;margin-top:2px}
+.doom-loyalty .tx-pts{font-size:15px;font-weight:700;white-space:nowrap}
+.doom-loyalty .tx-pts.earn{color:#16a34a}
+.doom-loyalty .tx-pts.redeem{color:#dc2626}
+.doom-loyalty .tx-pts.expire{color:#9ca3af}
 
 /* ── Login prompt ── */
-.login-prompt{padding:64px 20px;text-align:center}
-.login-prompt h2{font-size:24px;font-weight:900;color:#5b21b6;text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px}
-.login-prompt p{color:#6b7280;margin-bottom:24px;font-size:15px}
+.doom-loyalty .login-prompt{padding:64px 20px;text-align:center}
+.doom-loyalty .login-prompt h2{font-size:24px;font-weight:900;color:#5b21b6;text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px}
+.doom-loyalty .login-prompt p{color:#6b7280;margin-bottom:24px;font-size:15px}
 </style>
-</head>
-<body>
+
+<div class="doom-loyalty">
 
 ${!d.loggedIn ? `<div class="hero"><div class="wrap">${notLoggedIn}</div></div>` : `
 <div class="hero"><div class="wrap">${loggedInHero}</div></div>
@@ -509,7 +503,6 @@ ${!d.loggedIn ? `<div class="hero"><div class="wrap">${notLoggedIn}</div></div>`
   </div>
 </section>`}
 
-</body>
-</html>`;
+</div>`;
 }
 
